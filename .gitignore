@@ -2,3 +2,5 @@
 .env
 *.pem
 *.key
+
+paper_account.json
