@@ -1,0 +1,32 @@
+# Polymarket Bot Configuration
+
+[api]
+# Polygon chain ID (137 = mainnet)
+chain_id = 137
+
+[trading]
+# Maximum position size in USDC
+max_position = 100.0
+# Minimum edge (%) before taking a trade
+min_edge = 5.0
+# Maximum number of concurrent positions
+max_positions = 5
+
+[risk]
+# Maximum total exposure in USDC
+max_exposure = 500.0
+# Stop loss (% of position)
+stop_loss = 20.0
+# Take profit (% of position)
+take_profit = 50.0
+
+[strategy]
+# Available: "simple", "news_arb", "liquidity"
+active = "simple"
+# How often to check for signals (seconds)
+poll_interval = 30
+
+[notifications]
+# Telegram notifications
+telegram_enabled = false
+telegram_chat_id = ""
