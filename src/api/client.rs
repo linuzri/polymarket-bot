@@ -75,16 +75,16 @@ impl PolymarketClient {
         Ok(markets)
     }
 
-    /// Fetch a single market by slug or condition ID
-    pub async fn get_market(&self, id: &str) -> Result<Market> {
+    /// Fetch a single market by slug
+    pub async fn get_market(&self, slug: &str) -> Result<Market> {
         let url = format!(
-            "{}/markets/{}",
-            self.gamma_url, id
+            "{}{}?slug={}",
+            self.gamma_url, endpoints::MARKETS, slug
         );
 
         debug!("Fetching market: {}", url);
 
-        let gm: GammaMarket = self
+        let markets: Vec<GammaMarket> = self
             .http
             .get(&url)
             .send()
@@ -93,6 +93,9 @@ impl PolymarketClient {
             .json()
             .await
             .context("Failed to parse market response")?;
+
+        let gm = markets.into_iter().next()
+            .context(format!("Market not found: {}", slug))?;
 
         Ok(Market {
             condition_id: gm.condition_id.unwrap_or_default(),

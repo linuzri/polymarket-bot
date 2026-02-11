@@ -1,0 +1,28 @@
+{
+  "balance": 950.0,
+  "positions": {
+    "50234231681845123897762455841846523448929127730863555921965983515798716361286": {
+      "token_id": "50234231681845123897762455841846523448929127730863555921965983515798716361286",
+      "market_question": "Will Michael B. Jordan attend the Oscars?",
+      "side": "Yes",
+      "quantity": 50.050050050050054,
+      "avg_entry_price": 0.999,
+      "current_price": 0.5
+    }
+  },
+  "trade_history": [
+    {
+      "id": "96d7b913-ecaa-46b7-afe1-e873d655f0ee",
+      "timestamp": "2026-02-11T13:56:06.228846300Z",
+      "token_id": "50234231681845123897762455841846523448929127730863555921965983515798716361286",
+      "market_question": "Will Michael B. Jordan attend the Oscars?",
+      "side": "Buy",
+      "token_side": "Yes",
+      "quantity": 50.050050050050054,
+      "price": 0.999,
+      "total_cost": 50.0,
+      "pnl": null
+    }
+  ],
+  "created_at": "2026-02-11T13:54:30.604972800Z"
+}
