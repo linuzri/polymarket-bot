@@ -1,5 +1,6 @@
 mod api;
 mod models;
+mod paper;
 mod strategy;
 mod signals;
 
@@ -49,6 +50,39 @@ enum Commands {
         #[arg(short, long, default_value = "simple")]
         strategy: String,
     },
+    /// Paper trading commands
+    Paper {
+        #[command(subcommand)]
+        action: PaperCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum PaperCommands {
+    /// Buy tokens with paper money
+    Buy {
+        /// Market slug
+        market_slug: String,
+        /// Token side: yes or no
+        side: String,
+        /// Amount in USD to spend
+        amount: f64,
+    },
+    /// Sell tokens
+    Sell {
+        /// Market slug
+        market_slug: String,
+        /// Token side: yes or no
+        side: String,
+        /// Amount in USD worth to sell
+        amount: f64,
+    },
+    /// Show portfolio with positions and P/L
+    Portfolio,
+    /// Show trade history
+    History,
+    /// Reset account to $1000
+    Reset,
 }
 
 #[tokio::main]
@@ -123,6 +157,161 @@ async fn main() -> Result<()> {
         Commands::Run { strategy } => {
             info!("Starting bot with strategy: {}", strategy);
             warn!("Trading bot not yet implemented. Phase 1: data collection only.");
+        }
+        Commands::Paper { action } => {
+            handle_paper(action, &client).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_paper(action: PaperCommands, client: &api::client::PolymarketClient) -> anyhow::Result<()> {
+    let mut account = paper::PaperAccount::load()?;
+
+    match action {
+        PaperCommands::Buy { market_slug, side, amount } => {
+            let token_side = match side.to_lowercase().as_str() {
+                "yes" => paper::TokenSide::Yes,
+                "no" => paper::TokenSide::No,
+                _ => anyhow::bail!("Side must be 'yes' or 'no'"),
+            };
+
+            let market = client.get_market(&market_slug).await?;
+            let tokens = market.tokens.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Market has no token IDs"))?;
+
+            let token_idx = match token_side {
+                paper::TokenSide::Yes => 0,
+                paper::TokenSide::No => 1,
+            };
+
+            let token_id = tokens.get(token_idx)
+                .ok_or_else(|| anyhow::anyhow!("Token ID not found for {:?} side", token_side))?;
+
+            let book = client.get_order_book(token_id).await?;
+            let ask_price = book.asks.first()
+                .map(|a| a.price)
+                .ok_or_else(|| anyhow::anyhow!("No asks in order book"))?;
+
+            let quantity = amount / ask_price;
+
+            let trade = account.buy(token_id, &market.question, token_side, quantity, ask_price)?;
+            println!("\n✅ Paper BUY executed!");
+            println!("   Market: {}", trade.market_question);
+            println!("   Side: {} {}", trade.token_side, trade.side);
+            println!("   Quantity: {:.2} tokens @ ${:.4}", trade.quantity, trade.price);
+            println!("   Total: ${:.2}", trade.total_cost);
+            println!("   Balance: ${:.2}", account.balance);
+        }
+        PaperCommands::Sell { market_slug, side, amount } => {
+            let token_side = match side.to_lowercase().as_str() {
+                "yes" => paper::TokenSide::Yes,
+                "no" => paper::TokenSide::No,
+                _ => anyhow::bail!("Side must be 'yes' or 'no'"),
+            };
+
+            let market = client.get_market(&market_slug).await?;
+            let tokens = market.tokens.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Market has no token IDs"))?;
+
+            let token_idx = match token_side {
+                paper::TokenSide::Yes => 0,
+                paper::TokenSide::No => 1,
+            };
+
+            let token_id = tokens.get(token_idx)
+                .ok_or_else(|| anyhow::anyhow!("Token ID not found for {:?} side", token_side))?;
+
+            let book = client.get_order_book(token_id).await?;
+            let bid_price = book.bids.first()
+                .map(|b| b.price)
+                .ok_or_else(|| anyhow::anyhow!("No bids in order book"))?;
+
+            let quantity = amount / bid_price;
+
+            let trade = account.sell(token_id, quantity, bid_price)?;
+            println!("\n✅ Paper SELL executed!");
+            println!("   Market: {}", trade.market_question);
+            println!("   Side: {} {}", trade.token_side, trade.side);
+            println!("   Quantity: {:.2} tokens @ ${:.4}", trade.quantity, trade.price);
+            println!("   Total: ${:.2}", trade.total_cost);
+            println!("   P/L: {}", trade.pnl.map(|p| format!("${:.2}", p)).unwrap_or("N/A".into()));
+            println!("   Balance: ${:.2}", account.balance);
+        }
+        PaperCommands::Portfolio => {
+            // Update current prices for all positions
+            for (token_id, _pos) in account.positions.clone().iter() {
+                if let Ok(book) = client.get_order_book(token_id).await {
+                    account.update_position_price(token_id, book.mid_price);
+                }
+            }
+            account.save()?;
+
+            println!("\n💰 Paper Trading Portfolio");
+            println!("   Balance: ${:.2}", account.balance);
+            println!("   Created: {}", account.created_at.format("%Y-%m-%d %H:%M UTC"));
+            println!("\n{:<40} {:>6} {:>8} {:>8} {:>8} {:>10}",
+                "Market", "Side", "Qty", "Entry", "Current", "P/L");
+            println!("{}", "-".repeat(84));
+
+            if account.positions.is_empty() {
+                println!("   No open positions");
+            } else {
+                for pos in account.positions.values() {
+                    let pnl = pos.unrealized_pnl();
+                    let pnl_str = if pnl >= 0.0 {
+                        format!("+${:.2}", pnl)
+                    } else {
+                        format!("-${:.2}", pnl.abs())
+                    };
+                    println!(
+                        "{:<40} {:>6} {:>8.2} {:>7.4} {:>7.4} {:>10}",
+                        truncate(&pos.market_question, 38),
+                        pos.side,
+                        pos.quantity,
+                        pos.avg_entry_price,
+                        pos.current_price,
+                        pnl_str,
+                    );
+                }
+            }
+
+            println!("\n   Portfolio Value: ${:.2}", account.portfolio_value());
+            println!("   Unrealized P/L: ${:.2}", account.unrealized_pnl());
+            println!("   Realized P/L:   ${:.2}", account.realized_pnl());
+            println!("   Total P/L:      ${:.2}", account.unrealized_pnl() + account.realized_pnl());
+        }
+        PaperCommands::History => {
+            println!("\n📜 Trade History");
+            println!("{:<20} {:<6} {:<4} {:>8} {:>8} {:>10} {:>10}",
+                "Time", "Side", "Tkn", "Qty", "Price", "Total", "P/L");
+            println!("{}", "-".repeat(70));
+
+            if account.trade_history.is_empty() {
+                println!("   No trades yet");
+            } else {
+                for trade in account.trade_history.iter().rev() {
+                    let pnl_str = trade.pnl
+                        .map(|p| format!("${:.2}", p))
+                        .unwrap_or_else(|| "-".to_string());
+                    println!(
+                        "{:<20} {:<6} {:<4} {:>8.2} {:>7.4} {:>9.2} {:>10}",
+                        trade.timestamp.format("%m-%d %H:%M"),
+                        trade.side,
+                        trade.token_side,
+                        trade.quantity,
+                        trade.price,
+                        trade.total_cost,
+                        pnl_str,
+                    );
+                }
+            }
+            println!("\nTotal trades: {}", account.trade_history.len());
+        }
+        PaperCommands::Reset => {
+            account.reset()?;
+            println!("\n🔄 Paper account reset to $1000.00");
         }
     }
 
