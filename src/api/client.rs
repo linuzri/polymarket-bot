@@ -267,6 +267,64 @@ impl PolymarketClient {
         self.auth_get_full("/balance-allowance", &full_path).await
     }
 
+    /// Authenticated POST request to CLOB API
+    pub async fn auth_post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let auth = self.require_auth()?;
+        // Compact JSON for HMAC signing (no spaces)
+        let body_str = serde_json::to_string(body).context("Failed to serialize body")?;
+        let headers = auth.sign_request("POST", path, Some(&body_str))?;
+        let url = format!("{}{}", self.clob_url, path);
+
+        debug!("Auth POST: {} body={}", url, &body_str[..body_str.len().min(200)]);
+
+        let mut req = self.http.post(&url)
+            .header("Accept", "*/*")
+            .header("Content-Type", "application/json")
+            .header("Connection", "keep-alive");
+        for (k, v) in &headers {
+            req = req.header(k, v);
+        }
+        req = req.body(body_str);
+
+        let resp = req.send().await.context("Auth POST request failed")?;
+        let status = resp.status();
+        let body = resp.text().await.context("Failed to read response body")?;
+
+        if !status.is_success() {
+            anyhow::bail!("CLOB API error ({}): {}", status, body);
+        }
+
+        serde_json::from_str(&body).with_context(|| format!("Failed to parse JSON: {}", &body[..body.len().min(200)]))
+    }
+
+    /// Post a signed order
+    pub async fn post_order(&self, order_body: &serde_json::Value) -> Result<serde_json::Value> {
+        self.auth_post("/order", order_body).await
+    }
+
+    /// Get fee rate for a maker address
+    pub async fn get_fee_rate(&self, maker_address: &str) -> Result<u64> {
+        let url = format!("{}/fee-rate?maker_address={}", self.clob_url, maker_address);
+        let resp: serde_json::Value = self.http.get(&url).send().await?.json().await?;
+        // Response might be {"fee_rate_bps": "100"} or similar
+        let rate = resp.get("fee_rate_bps")
+            .or_else(|| resp.get("feeRateBps"))
+            .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+            .unwrap_or(0);
+        Ok(rate)
+    }
+
+    /// Check if a market uses neg_risk via Gamma API
+    pub async fn get_neg_risk(&self, slug: &str) -> Result<bool> {
+        let url = format!("{}{}?slug={}", self.gamma_url, endpoints::MARKETS, slug);
+        let markets: Vec<serde_json::Value> = self.http.get(&url).send().await?.json().await?;
+        let neg_risk = markets.first()
+            .and_then(|m| m.get("negRisk"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true); // default true as most markets use neg_risk
+        Ok(neg_risk)
+    }
+
     /// Fetch open orders
     pub async fn get_positions(&self) -> Result<Vec<serde_json::Value>> {
         let data = self.auth_get_full("/data/orders", "/data/orders").await?;

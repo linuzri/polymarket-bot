@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod models;
+mod orders;
 mod paper;
 mod strategy;
 mod signals;
@@ -50,6 +51,30 @@ enum Commands {
         /// Strategy to use
         #[arg(short, long, default_value = "simple")]
         strategy: String,
+    },
+    /// Buy shares on a market (real order)
+    Buy {
+        /// Market slug
+        market_slug: String,
+        /// Token side: yes or no
+        side: String,
+        /// Amount in USD to spend
+        amount_usd: f64,
+        /// Dry run - build and sign but don't post
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Sell shares on a market (real order)
+    Sell {
+        /// Market slug
+        market_slug: String,
+        /// Token side: yes or no
+        side: String,
+        /// Number of shares to sell
+        amount_shares: f64,
+        /// Dry run - build and sign but don't post
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Paper trading commands
     Paper {
@@ -207,6 +232,65 @@ async fn main() -> Result<()> {
         Commands::Run { strategy } => {
             info!("Starting bot with strategy: {}", strategy);
             warn!("Trading bot not yet implemented. Phase 1: data collection only.");
+        }
+        Commands::Buy { market_slug, side, amount_usd, dry_run } => {
+            let market = client.get_market(&market_slug).await?;
+            let tokens = market.tokens.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Market has no token IDs"))?;
+            let token_idx = match side.to_lowercase().as_str() {
+                "yes" => 0,
+                "no" => 1,
+                _ => anyhow::bail!("Side must be 'yes' or 'no'"),
+            };
+            let token_id = tokens.get(token_idx)
+                .ok_or_else(|| anyhow::anyhow!("Token ID not found for {} side", side))?;
+
+            // Get best ask price from order book
+            let book = client.get_order_book(token_id).await?;
+            let price = book.asks.first()
+                .map(|a| a.price)
+                .ok_or_else(|| anyhow::anyhow!("No asks in order book"))?;
+
+            let size = amount_usd / price;
+            let neg_risk = client.get_neg_risk(&market_slug).await.unwrap_or(true);
+
+            println!("📊 {} - {}", market.question, side.to_uppercase());
+            println!("   Price: ${:.4}  Size: {:.2} shares  Cost: ${:.2}", price, size, amount_usd);
+            println!("   Neg risk: {}  Token: {}...{}", neg_risk, &token_id[..8], &token_id[token_id.len()-4..]);
+
+            let result = orders::place_order(&client, token_id, orders::Side::Buy, price, size, neg_risk, dry_run).await?;
+            if !dry_run {
+                println!("\n✅ Order placed: {}", serde_json::to_string_pretty(&result)?);
+            }
+        }
+        Commands::Sell { market_slug, side, amount_shares, dry_run } => {
+            let market = client.get_market(&market_slug).await?;
+            let tokens = market.tokens.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Market has no token IDs"))?;
+            let token_idx = match side.to_lowercase().as_str() {
+                "yes" => 0,
+                "no" => 1,
+                _ => anyhow::bail!("Side must be 'yes' or 'no'"),
+            };
+            let token_id = tokens.get(token_idx)
+                .ok_or_else(|| anyhow::anyhow!("Token ID not found for {} side", side))?;
+
+            // Get best bid price from order book
+            let book = client.get_order_book(token_id).await?;
+            let price = book.bids.first()
+                .map(|b| b.price)
+                .ok_or_else(|| anyhow::anyhow!("No bids in order book"))?;
+
+            let neg_risk = client.get_neg_risk(&market_slug).await.unwrap_or(true);
+
+            println!("📊 {} - {} SELL", market.question, side.to_uppercase());
+            println!("   Price: ${:.4}  Size: {:.2} shares  Value: ${:.2}", price, amount_shares, amount_shares * price);
+            println!("   Neg risk: {}  Token: {}...{}", neg_risk, &token_id[..8], &token_id[token_id.len()-4..]);
+
+            let result = orders::place_order(&client, token_id, orders::Side::Sell, price, amount_shares, neg_risk, dry_run).await?;
+            if !dry_run {
+                println!("\n✅ Order placed: {}", serde_json::to_string_pretty(&result)?);
+            }
         }
         Commands::Paper { action } => {
             handle_paper(action, &client).await?;

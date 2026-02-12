@@ -43,6 +43,9 @@ sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 
+# Hex encoding
+hex = "0.4"
+
 # Error handling
 anyhow = "1"
 thiserror = "2"
