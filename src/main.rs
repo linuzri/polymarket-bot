@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod models;
 mod paper;
 mod strategy;
@@ -151,8 +152,54 @@ async fn main() -> Result<()> {
             // TODO: Implement WebSocket streaming
         }
         Commands::Account => {
-            info!("Checking account...");
-            warn!("Account management requires API key setup. See config.toml");
+            // Show wallet address from env if available
+            if let Ok(addr) = std::env::var("POLY_WALLET_ADDRESS") {
+                println!("\n👤 Wallet: {}", addr);
+            }
+
+            match client.get_profile().await {
+                Ok(profile) => {
+                    println!("\n👤 Account Profile");
+                    if let Some(obj) = profile.as_object() {
+                        for (k, v) in obj {
+                            println!("   {}: {}", k, v);
+                        }
+                    } else {
+                        println!("   {}", profile);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch profile: {}", e);
+                    println!("\n⚠️  Could not fetch profile: {}", e);
+                }
+            }
+
+            match client.get_balance().await {
+                Ok(balance) => {
+                    println!("\n💰 USDC Balance: ${:.2}", balance);
+                }
+                Err(e) => {
+                    warn!("Failed to fetch balance: {}", e);
+                    println!("⚠️  Could not fetch balance: {}", e);
+                }
+            }
+
+            match client.get_positions().await {
+                Ok(positions) => {
+                    println!("\n📊 Open Positions:");
+                    if positions.is_empty() {
+                        println!("   No open positions");
+                    } else {
+                        for pos in &positions {
+                            println!("   {}", pos);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch positions: {}", e);
+                    println!("⚠️  Could not fetch positions: {}", e);
+                }
+            }
         }
         Commands::Run { strategy } => {
             info!("Starting bot with strategy: {}", strategy);

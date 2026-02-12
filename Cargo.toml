@@ -37,6 +37,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # UUID
 uuid = { version = "1", features = ["v4"] }
 
+# HMAC auth
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+
 # Error handling
 anyhow = "1"
 thiserror = "2"
