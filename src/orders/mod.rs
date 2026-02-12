@@ -117,7 +117,13 @@ impl Order {
         let token_id = U256::from_str_radix(token_id, 10)
             .context("Failed to parse token_id as U256")?;
 
-        let salt = U256::from(rand::random::<u128>());
+        // Salt: timestamp * random [0,1) like Python's py_order_utils
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let rng: f64 = rand::random();
+        let salt = U256::from((now as f64 * rng) as u64);
 
         Ok(Self {
             salt,
@@ -183,10 +189,10 @@ impl Order {
     pub fn to_json(&self, signature: &str, owner: &str, order_type: &str) -> serde_json::Value {
         json!({
             "order": {
-                "salt": self.salt.to_string(),
-                "maker": format!("{:#x}", self.maker),
-                "signer": format!("{:#x}", self.signer),
-                "taker": format!("{:#x}", self.taker),
+                "salt": self.salt.to::<u128>(),
+                "maker": format!("{}", self.maker),
+                "signer": format!("{}", self.signer),
+                "taker": format!("{}", self.taker),
                 "tokenId": self.token_id.to_string(),
                 "makerAmount": self.maker_amount.to_string(),
                 "takerAmount": self.taker_amount.to_string(),
@@ -198,7 +204,8 @@ impl Order {
                 "signature": signature
             },
             "owner": owner,
-            "orderType": order_type
+            "orderType": order_type,
+            "postOnly": false
         })
     }
 }
