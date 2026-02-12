@@ -199,7 +199,7 @@ impl PolymarketClient {
             .header("Accept", "*/*")
             .header("Content-Type", "application/json")
             .header("Connection", "keep-alive")
-            .header("Accept-Encoding", "gzip");
+;
         for (k, v) in &headers {
             req = req.header(k, v);
         }
@@ -220,7 +220,8 @@ impl PolymarketClient {
             anyhow::bail!("CLOB API error ({}): {}", status, body);
         }
 
-        serde_json::from_str(&body).context("Failed to parse JSON response")
+        debug!("Response body: {}", &body[..body.len().min(500)]);
+        serde_json::from_str(&body).with_context(|| format!("Failed to parse JSON response: {}", &body[..body.len().min(200)]))
     }
 
     /// Simple auth_get where sign path == request path
@@ -236,9 +237,10 @@ impl PolymarketClient {
     /// Fetch USDC balance allowance
     pub async fn get_balance(&self) -> Result<f64> {
         // Sign with just the path, but request with query params
+        // asset_type=COLLATERAL is the correct param (not USDC)
         let data = self.auth_get_full(
             "/balance-allowance",
-            "/balance-allowance?asset_type=USDC&signature_type=2"
+            "/balance-allowance?asset_type=COLLATERAL&signature_type=2"
         ).await?;
         // Response: {"balance": "123.45", "allowance": "..."}
         if let Some(bal_str) = data.get("balance").and_then(|b| b.as_str()) {
