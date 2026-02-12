@@ -236,23 +236,35 @@ impl PolymarketClient {
 
     /// Fetch USDC balance allowance
     pub async fn get_balance(&self) -> Result<f64> {
+        let auth = self.require_auth()?;
+        let sig_type = auth.signature_type;
         // Sign with just the path, but request with query params
-        // asset_type=COLLATERAL is the correct param (not USDC)
-        let data = self.auth_get_full(
-            "/balance-allowance",
-            "/balance-allowance?asset_type=COLLATERAL&signature_type=2"
-        ).await?;
-        // Response: {"balance": "123.45", "allowance": "..."}
+        let full_path = format!(
+            "/balance-allowance?asset_type=COLLATERAL&signature_type={}",
+            sig_type
+        );
+        let data = self.auth_get_full("/balance-allowance", &full_path).await?;
+        // Response: {"balance": "100270276", "allowances": {...}}
+        // Balance is in raw units (6 decimals for USDC)
         if let Some(bal_str) = data.get("balance").and_then(|b| b.as_str()) {
-            return bal_str.parse::<f64>().context("Failed to parse balance");
+            let raw: f64 = bal_str.parse().context("Failed to parse balance")?;
+            return Ok(raw / 1_000_000.0); // USDC has 6 decimals
         }
         if let Some(bal) = data.get("balance").and_then(|b| b.as_f64()) {
-            return Ok(bal);
-        }
-        if let Some(bal) = data.as_f64() {
-            return Ok(bal);
+            return Ok(bal / 1_000_000.0);
         }
         anyhow::bail!("Unexpected balance response: {}", data)
+    }
+
+    /// Fetch full balance and allowance info
+    pub async fn get_balance_allowance(&self) -> Result<serde_json::Value> {
+        let auth = self.require_auth()?;
+        let sig_type = auth.signature_type;
+        let full_path = format!(
+            "/balance-allowance?asset_type=COLLATERAL&signature_type={}",
+            sig_type
+        );
+        self.auth_get_full("/balance-allowance", &full_path).await
     }
 
     /// Fetch open orders

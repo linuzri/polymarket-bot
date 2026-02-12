@@ -13,7 +13,12 @@ pub struct ClobAuth {
     pub api_key: String,
     pub api_secret: String,
     pub passphrase: String,
+    /// EOA wallet address (the signing key's address)
     pub wallet_address: String,
+    /// Proxy/funder wallet that holds the funds (optional)
+    pub funder_address: Option<String>,
+    /// Signature type: 0=EOA, 1=Magic/email proxy, 2=browser proxy
+    pub signature_type: u8,
 }
 
 impl ClobAuth {
@@ -27,13 +32,28 @@ impl ClobAuth {
             .context("POLY_PASSPHRASE not set. Add it to .env file.")?;
         let wallet_address = std::env::var("POLY_WALLET_ADDRESS")
             .context("POLY_WALLET_ADDRESS not set. Add it to .env file.")?;
+        let funder_address = std::env::var("POLY_PROXY_WALLET").ok();
+        let signature_type = std::env::var("POLY_SIGNATURE_TYPE")
+            .unwrap_or_else(|_| {
+                // Auto-detect: if funder is set, use type 1 (Magic/proxy)
+                if funder_address.is_some() { "1".into() } else { "0".into() }
+            })
+            .parse::<u8>()
+            .unwrap_or(0);
 
         Ok(Self {
             api_key,
             api_secret,
             passphrase,
             wallet_address,
+            funder_address,
+            signature_type,
         })
+    }
+
+    /// The address that holds funds (funder if set, otherwise EOA wallet)
+    pub fn funding_address(&self) -> &str {
+        self.funder_address.as_deref().unwrap_or(&self.wallet_address)
     }
 
     /// Generate L2 auth headers for a CLOB API request.

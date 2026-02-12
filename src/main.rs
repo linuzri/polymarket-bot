@@ -152,9 +152,12 @@ async fn main() -> Result<()> {
             // TODO: Implement WebSocket streaming
         }
         Commands::Account => {
-            // Show wallet address from env if available
+            // Show wallet addresses
             if let Ok(addr) = std::env::var("POLY_WALLET_ADDRESS") {
-                println!("\n👤 Wallet: {}", addr);
+                println!("\n👤 EOA Wallet: {}", addr);
+            }
+            if let Ok(funder) = std::env::var("POLY_PROXY_WALLET") {
+                println!("💳 Proxy Wallet (funds): {}", funder);
             }
 
             match client.get_profile().await {
