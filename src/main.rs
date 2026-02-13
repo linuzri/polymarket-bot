@@ -46,11 +46,14 @@ enum Commands {
     },
     /// Show account balance and positions
     Account,
-    /// Run the trading bot
+    /// Run the automated strategy engine
     Run {
         /// Strategy to use
-        #[arg(short, long, default_value = "simple")]
+        #[arg(short, long, default_value = "value")]
         strategy: String,
+        /// Force dry run (no real trades)
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Buy shares on a market (real order)
     Buy {
@@ -229,9 +232,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Run { strategy } => {
+        Commands::Run { strategy, dry_run } => {
             info!("Starting bot with strategy: {}", strategy);
-            warn!("Trading bot not yet implemented. Phase 1: data collection only.");
+            let config = strategy::config::StrategyConfig::load()?;
+            let mut engine = strategy::engine::StrategyEngine::new(config, dry_run)?;
+            engine.run().await?;
         }
         Commands::Buy { market_slug, side, amount_usd, dry_run } => {
             let market = client.get_market(&market_slug).await?;

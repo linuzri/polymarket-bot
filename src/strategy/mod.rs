@@ -1,2 +1,6 @@
-// Trading strategies - Phase 2
-// Will include: news arbitrage, cross-market arb, liquidity provision
+pub mod config;
+pub mod engine;
+pub mod evaluator;
+pub mod logger;
+pub mod risk;
+pub mod scanner;
