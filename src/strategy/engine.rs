@@ -9,6 +9,7 @@ use super::logger::{TradeEntry, TradeLog};
 use super::risk::RiskManager;
 use super::scanner::MarketScanner;
 use super::config::StrategyConfig;
+use crate::notifications::TelegramNotifier;
 
 pub struct StrategyEngine {
     config: StrategyConfig,
@@ -18,6 +19,7 @@ pub struct StrategyEngine {
     risk_manager: RiskManager,
     trade_log: TradeLog,
     dry_run: bool,
+    notifier: TelegramNotifier,
 }
 
 impl StrategyEngine {
@@ -51,6 +53,7 @@ impl StrategyEngine {
             trade_log: TradeLog::load()?,
             dry_run,
             config,
+            notifier: TelegramNotifier::new(),
         })
     }
 
@@ -125,12 +128,41 @@ impl StrategyEngine {
                     sized.size_usd, shares, signal.reason);
                 println!("     Action: BUY {} {}\n", signal.side, action_label);
 
+                // Send signal notification
+                self.notifier.notify_signal(
+                    &signal.market.question,
+                    &signal.side.to_string(),
+                    signal.edge,
+                    signal.confidence,
+                    sized.size_usd,
+                    &signal.reason,
+                ).await;
+
                 // Execute or log
                 if !self.dry_run {
                     match self.execute_trade(&sized.token_id, sized.price, shares, signal.market.neg_risk).await {
-                        Ok(_) => info!("✅ Trade executed for {}", signal.market.slug),
-                        Err(e) => error!("❌ Trade failed for {}: {}", signal.market.slug, e),
+                        Ok(_) => {
+                            info!("Trade executed for {}", signal.market.slug);
+                            self.notifier.notify_trade(
+                                &signal.market.question,
+                                &signal.side.to_string(),
+                                sized.price, sized.size_usd, shares, false,
+                            ).await;
+                        }
+                        Err(e) => {
+                            error!("Trade failed for {}: {}", signal.market.slug, e);
+                            self.notifier.notify_error(
+                                &format!("Trade for {}", signal.market.slug),
+                                &e.to_string(),
+                            ).await;
+                        }
                     }
+                } else {
+                    self.notifier.notify_trade(
+                        &signal.market.question,
+                        &signal.side.to_string(),
+                        sized.price, sized.size_usd, shares, true,
+                    ).await;
                 }
 
                 // Log the trade
@@ -189,7 +221,8 @@ impl StrategyEngine {
                 Ok(_) => {},
                 Err(e) => {
                     error!("Strategy cycle error: {}", e);
-                    println!("❌ Cycle error: {}. Retrying...", e);
+                    println!("Cycle error: {}. Retrying...", e);
+                    self.notifier.notify_error("Strategy cycle", &e.to_string()).await;
                 }
             }
 

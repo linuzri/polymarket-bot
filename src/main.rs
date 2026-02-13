@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod models;
+mod notifications;
 mod orders;
 mod paper;
 mod strategy;
