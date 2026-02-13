@@ -104,12 +104,18 @@ impl Order {
 
         let (maker_amount, taker_amount) = match side {
             Side::Buy => {
+                // BUY: maker=USDC (max 5 decimals), taker=shares (max 2 decimals)
                 let usdc = size * price;
-                (to_token_decimals(usdc), to_token_decimals(size))
+                let maker = ((usdc * 1_000_000.0).round() / 10.0).floor() as u64 * 10; // 5 decimal precision
+                let taker = ((size * 100.0).floor() as u64) * 10_000; // 2 decimal precision
+                (U256::from(maker), U256::from(taker))
             }
             Side::Sell => {
+                // SELL: maker=shares (max 2 decimals), taker=USDC (max 5 decimals)  
                 let usdc = size * price;
-                (to_token_decimals(size), to_token_decimals(usdc))
+                let maker = ((size * 100.0).floor() as u64) * 10_000; // 2 decimal precision
+                let taker = ((usdc * 1_000_000.0).round() / 10.0).floor() as u64 * 10; // 5 decimal precision
+                (U256::from(maker), U256::from(taker))
             }
         };
 

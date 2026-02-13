@@ -107,13 +107,32 @@
       "dry_run": false,
       "pnl": null,
       "closed": false
+    },
+    {
+      "id": "d248a506-dc36-4c87-8a0e-dd7a77568e0f",
+      "timestamp": "2026-02-13T12:36:35.646531400Z",
+      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
+      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
+      "side": "NO",
+      "action": "BUY",
+      "price": 0.0565,
+      "size_usd": 5.0,
+      "shares": 88.49557522123894,
+      "edge": 0.3435,
+      "confidence": 0.45,
+      "reason": "While the market suggests very high likelihood, Trump's Fed chair selections have been unpredictable. Kevin Warsh is a known Trump ally, but actual nomination depends on complex political dynamics and potential alternative candidates.",
+      "dry_run": false,
+      "pnl": null,
+      "closed": false
     }
   ],
   "open_positions": {
-    "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093": 3.7205882352941178,
     "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab": 5.0,
     "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266": 1.279411764705884,
     "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c": 5.0,
-    "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b": 5.0
+    "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b": 5.0,
+    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc": 5.0,
+    "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093": 3.7205882352941178
   }
 }
