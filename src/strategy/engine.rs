@@ -3,6 +3,7 @@ use chrono::Utc;
 use tracing::{info, warn, error};
 use uuid::Uuid;
 
+use super::ai_evaluator::AiEvaluator;
 use super::evaluator::{Evaluator, SignalSide};
 use super::logger::{TradeEntry, TradeLog};
 use super::risk::RiskManager;
@@ -13,6 +14,7 @@ pub struct StrategyEngine {
     config: StrategyConfig,
     scanner: MarketScanner,
     evaluator: Evaluator,
+    ai_evaluator: Option<AiEvaluator>,
     risk_manager: RiskManager,
     trade_log: TradeLog,
     dry_run: bool,
@@ -23,9 +25,28 @@ impl StrategyEngine {
         let dry_run = dry_run_override || config.dry_run;
         let risk = config.risk.clone();
 
+        // Try to create AI evaluator if enabled and API key available
+        let ai_evaluator = if config.ai_evaluator.enabled {
+            match std::env::var("ANTHROPIC_API_KEY") {
+                Ok(key) if !key.is_empty() => {
+                    info!("🧠 AI evaluator enabled (model: {})", config.ai_evaluator.model);
+                    println!("🧠 AI evaluator enabled (model: {})", config.ai_evaluator.model);
+                    Some(AiEvaluator::new(key, risk.min_edge, config.ai_evaluator.clone()))
+                }
+                _ => {
+                    warn!("⚠️  ANTHROPIC_API_KEY not set — falling back to heuristic evaluator");
+                    println!("⚠️  ANTHROPIC_API_KEY not set — falling back to heuristic evaluator");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             scanner: MarketScanner::new(risk.min_volume, risk.min_hours_to_close),
             evaluator: Evaluator::new(risk.min_edge),
+            ai_evaluator,
             risk_manager: RiskManager::new(risk),
             trade_log: TradeLog::load()?,
             dry_run,
@@ -48,12 +69,18 @@ impl StrategyEngine {
         }
 
         // 2. Evaluate each candidate
-        let mut signals = Vec::new();
-        for candidate in &candidates {
-            if let Some(signal) = self.evaluator.evaluate(candidate) {
-                signals.push(signal);
+        let mut signals = if let Some(ref ai) = self.ai_evaluator {
+            println!("🧠 Running AI evaluation on up to {} markets...\n", candidates.len().min(20));
+            ai.evaluate_batch(&candidates).await
+        } else {
+            let mut sigs = Vec::new();
+            for candidate in &candidates {
+                if let Some(signal) = self.evaluator.evaluate(candidate) {
+                    sigs.push(signal);
+                }
             }
-        }
+            sigs
+        };
 
         println!("📊 Signals: {} markets with potential edge\n", signals.len());
 

@@ -1,3 +1,4 @@
+pub mod ai_evaluator;
 pub mod config;
 pub mod engine;
 pub mod evaluator;

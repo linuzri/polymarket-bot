@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::ai_evaluator::AiEvaluatorConfig;
 use super::risk::RiskConfig;
 
 const CONFIG_FILE: &str = "strategy_config.json";
@@ -12,6 +13,8 @@ pub struct StrategyConfig {
     pub scan_interval_secs: u64,
     pub risk: RiskConfig,
     pub dry_run: bool,
+    #[serde(default)]
+    pub ai_evaluator: AiEvaluatorConfig,
 }
 
 impl Default for StrategyConfig {
@@ -21,6 +24,7 @@ impl Default for StrategyConfig {
             scan_interval_secs: 300,
             risk: RiskConfig::default(),
             dry_run: true,
+            ai_evaluator: AiEvaluatorConfig::default(),
         }
     }
 }

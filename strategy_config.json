@@ -10,5 +10,12 @@
         "min_hours_to_close": 24.0,
         "kelly_fraction": 0.25
     },
-    "dry_run": true
+    "dry_run": true,
+    "ai_evaluator": {
+        "enabled": true,
+        "model": "claude-3-5-haiku-20241022",
+        "max_markets_per_cycle": 20,
+        "min_confidence": 0.3,
+        "delay_between_calls_ms": 200
+    }
 }
