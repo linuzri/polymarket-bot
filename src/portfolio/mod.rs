@@ -59,6 +59,8 @@ pub struct PortfolioState {
     pub resolved: Vec<ResolvedPosition>,
     #[serde(default)]
     pub alerted_resolutions: Vec<String>,            // condition_ids already alerted
+    #[serde(default)]
+    pub synced_trade_ids: Vec<String>,               // trade IDs already synced to portfolio
     pub last_updated: DateTime<Utc>,
 }
 
@@ -75,6 +77,7 @@ impl PortfolioState {
                 positions: HashMap::new(),
                 resolved: Vec::new(),
                 alerted_resolutions: Vec::new(),
+                synced_trade_ids: Vec::new(),
                 last_updated: Utc::now(),
             })
         }
@@ -129,6 +132,12 @@ pub fn sync_from_trade_log(state: &mut PortfolioState) -> Result<()> {
             continue;
         }
 
+        // Skip trades already synced
+        let trade_id = trade.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        if !trade_id.is_empty() && state.synced_trade_ids.contains(&trade_id.to_string()) {
+            continue;
+        }
+
         let condition_id = trade.get("condition_id").and_then(|v| v.as_str()).unwrap_or_default();
         let market_slug = trade.get("market_slug").and_then(|v| v.as_str()).unwrap_or_default();
         let market_question = trade.get("market_question").and_then(|v| v.as_str()).unwrap_or_default();
@@ -147,8 +156,13 @@ pub fn sync_from_trade_log(state: &mut PortfolioState) -> Result<()> {
         // Use condition_id as key since we may not have token_id in trade log
         let key = format!("{}_{}", condition_id, side.to_lowercase());
 
+        // Track this trade as synced
+        if !trade_id.is_empty() {
+            state.synced_trade_ids.push(trade_id.to_string());
+        }
+
         if state.positions.contains_key(&key) {
-            // Update existing position (add shares)
+            // Update existing position (add shares from NEW trade)
             let pos = state.positions.get_mut(&key).unwrap();
             let total_cost = pos.cost_basis + size_usd;
             let total_shares = pos.shares + shares;

@@ -78,6 +78,12 @@ impl RiskManager {
             SignalSide::No => (signal.market.no_price, signal.market.no_token_id.clone()),
         };
 
+        // Minimum price filter - don't buy lottery tickets
+        if price < 0.10 {
+            tracing::debug!("Risk: price too low (${:.4}) - skipping lottery ticket", price);
+            return None;
+        }
+
         // Kelly criterion sizing
         // f* = (p * b - q) / b where b = (1/price - 1), p = estimated_prob, q = 1-p
         // Simplified: kelly = edge / (1 - price)
