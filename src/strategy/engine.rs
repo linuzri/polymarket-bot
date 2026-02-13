@@ -4,12 +4,14 @@ use tracing::{info, warn, error};
 use uuid::Uuid;
 
 use super::ai_evaluator::AiEvaluator;
+use super::config::AutoSellConfig;
 use super::evaluator::{Evaluator, SignalSide};
 use super::logger::{TradeEntry, TradeLog};
 use super::risk::RiskManager;
 use super::scanner::MarketScanner;
 use super::config::StrategyConfig;
 use crate::notifications::TelegramNotifier;
+use crate::portfolio::PortfolioState;
 
 pub struct StrategyEngine {
     config: StrategyConfig,
@@ -69,6 +71,178 @@ impl StrategyEngine {
         }
         state.save()?;
         Ok(())
+    }
+
+    /// Check open positions for auto-sell triggers (take profit, stop loss)
+    async fn check_auto_sell(&self) -> Result<()> {
+        let auto_sell = &self.config.auto_sell;
+        if !auto_sell.enabled {
+            return Ok(());
+        }
+
+        let client = crate::api::client::PolymarketClient::new()?;
+        let mut state = PortfolioState::load()?;
+        crate::portfolio::sync_from_trade_log(&mut state)?;
+
+        if state.positions.is_empty() {
+            return Ok(());
+        }
+
+        // Update current prices first
+        crate::portfolio::update_prices(&mut state, &client).await?;
+
+        let take_profit_pct = auto_sell.take_profit_pct;
+        let stop_loss_pct = auto_sell.stop_loss_pct;
+
+        // Collect positions to sell (can't borrow mutably while iterating)
+        let mut to_sell: Vec<(String, String, f64, f64, String)> = Vec::new(); // (key, reason, sell_price, shares, side)
+
+        for (key, pos) in &state.positions {
+            let entry = pos.avg_entry_price;
+            let current = pos.current_price;
+
+            // Take profit check
+            let tp_target = entry + (take_profit_pct * entry);
+            if current >= tp_target {
+                let reason = format!(
+                    "Take profit: price {:.4} >= target {:.4} ({:.0}% gain)",
+                    current, tp_target, ((current - entry) / entry) * 100.0
+                );
+                info!("AUTO-SELL [TP]: {} - {}", pos.market_question, reason);
+                to_sell.push((key.clone(), reason, current, pos.shares, pos.side.clone()));
+                continue;
+            }
+
+            // Stop loss check
+            let sl_target = entry - (stop_loss_pct * entry);
+            if current <= sl_target {
+                let reason = format!(
+                    "Stop loss: price {:.4} <= target {:.4} ({:.0}% loss)",
+                    current, sl_target, ((entry - current) / entry) * 100.0
+                );
+                info!("AUTO-SELL [SL]: {} - {}", pos.market_question, reason);
+                to_sell.push((key.clone(), reason, current, pos.shares, pos.side.clone()));
+                continue;
+            }
+        }
+
+        if to_sell.is_empty() {
+            return Ok(());
+        }
+
+        println!("\n  --- AUTO-SELL CHECK ---");
+        println!("  Found {} position(s) to sell\n", to_sell.len());
+
+        for (key, reason, sell_price, shares, side) in &to_sell {
+            let pos = match state.positions.get(key) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+
+            // Get token ID for the sell order
+            let token_id = if let Some(ref slug) = Some(&pos.market_slug).filter(|s| !s.is_empty()) {
+                match client.get_market(slug).await {
+                    Ok(market) => {
+                        let tokens = market.tokens.as_ref();
+                        let idx = if pos.side == "YES" { 0 } else { 1 };
+                        tokens.and_then(|t| t.get(idx).cloned())
+                    }
+                    Err(e) => {
+                        warn!("Failed to get market for sell: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let Some(token_id) = token_id else {
+                warn!("Cannot sell {}: no token ID found", pos.market_question);
+                continue;
+            };
+
+            // Get best bid price from order book
+            let actual_sell_price = match client.get_order_book(&token_id).await {
+                Ok(book) => book.bids.first().map(|b| b.price).unwrap_or(*sell_price),
+                Err(_) => *sell_price,
+            };
+
+            let neg_risk = client.get_neg_risk(&pos.market_slug).await.unwrap_or(true);
+            let pnl = (actual_sell_price - pos.avg_entry_price) * shares;
+
+            println!("  SELL {} \"{}\"", side, pos.market_question);
+            println!("     Entry: ${:.4} -> Sell: ${:.4} | {:.2} shares | P/L: ${:.2}", pos.avg_entry_price, actual_sell_price, shares, pnl);
+            println!("     Reason: {}", reason);
+
+            if !self.dry_run {
+                match crate::orders::place_order(&client, &token_id, crate::orders::Side::Sell, actual_sell_price, *shares, neg_risk, false).await {
+                    Ok(_) => {
+                        info!("Auto-sell executed for {}", pos.market_question);
+
+                        // Remove from portfolio
+                        state.positions.remove(key);
+
+                        // Also remove from trade log open_positions
+                        self.trade_log_remove_position(&pos.condition_id);
+
+                        // Add to resolved
+                        state.resolved.push(crate::portfolio::ResolvedPosition {
+                            condition_id: pos.condition_id.clone(),
+                            token_id: key.clone(),
+                            market_question: pos.market_question.clone(),
+                            side: pos.side.clone(),
+                            shares: *shares,
+                            cost_basis: pos.cost_basis,
+                            avg_entry_price: pos.avg_entry_price,
+                            resolution_price: actual_sell_price,
+                            realized_pnl: pnl,
+                            opened_at: pos.opened_at,
+                            resolved_at: Utc::now(),
+                            outcome: if pnl >= 0.0 { "SOLD-PROFIT".to_string() } else { "SOLD-LOSS".to_string() },
+                        });
+
+                        self.notifier.notify_sell(
+                            &pos.market_question, &pos.side,
+                            pos.avg_entry_price, actual_sell_price, *shares, pnl,
+                            reason, false,
+                        ).await;
+                    }
+                    Err(e) => {
+                        error!("Auto-sell failed for {}: {}", pos.market_question, e);
+                        self.notifier.notify_error(
+                            &format!("Auto-sell {}", pos.market_question),
+                            &e.to_string(),
+                        ).await;
+                    }
+                }
+            } else {
+                // Dry run — just notify
+                println!("     (dry run - not executing)\n");
+                self.notifier.notify_sell(
+                    &pos.market_question, &pos.side,
+                    pos.avg_entry_price, actual_sell_price, *shares, pnl,
+                    reason, true,
+                ).await;
+            }
+        }
+
+        state.last_updated = Utc::now();
+        state.save()?;
+        Ok(())
+    }
+
+    /// Remove a position from the trade log's open_positions tracker
+    fn trade_log_remove_position(&self, condition_id: &str) {
+        if let Ok(mut log) = TradeLog::load() {
+            log.open_positions.remove(condition_id);
+            // Mark matching trades as closed
+            for trade in &mut log.trades {
+                if trade.condition_id == condition_id && !trade.closed {
+                    trade.closed = true;
+                }
+            }
+            let _ = log.save();
+        }
     }
 
     /// Run one cycle of the strategy
@@ -224,6 +398,11 @@ impl StrategyEngine {
         // Check for resolved markets in portfolio
         if let Err(e) = self.check_portfolio_resolutions().await {
             warn!("Portfolio resolution check failed: {}", e);
+        }
+
+        // Check open positions for auto-sell triggers
+        if let Err(e) = self.check_auto_sell().await {
+            warn!("Auto-sell check failed: {}", e);
         }
 
         Ok(())

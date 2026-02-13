@@ -1,0 +1,87 @@
+{
+  "positions": {
+    "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c_no": {
+      "condition_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c",
+      "token_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c_no",
+      "market_slug": "will-netflix-close-warner-bros-acquisition",
+      "market_question": "Will Netflix close Warner Bros acquisition?",
+      "side": "NO",
+      "shares": 19.047619047619047,
+      "cost_basis": 10.0,
+      "avg_entry_price": 0.525,
+      "current_price": 0.545,
+      "opened_at": "2026-02-13T10:32:51.154244400Z"
+    },
+    "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes": {
+      "condition_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266",
+      "token_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes",
+      "market_slug": "will-trump-nominate-jerome-powell-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Jerome Powell as the next Fed chair?",
+      "side": "YES",
+      "shares": 1705.8823529411786,
+      "cost_basis": 2.558823529411768,
+      "avg_entry_price": 0.0015,
+      "current_price": 0.0005,
+      "opened_at": "2026-02-13T11:44:58.413503100Z"
+    },
+    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no": {
+      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
+      "token_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no",
+      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
+      "side": "NO",
+      "shares": 176.99115044247787,
+      "cost_basis": 10.0,
+      "avg_entry_price": 0.0565,
+      "current_price": 0.0415,
+      "opened_at": "2026-02-13T12:36:35.646531400Z"
+    },
+    "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes": {
+      "condition_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093",
+      "token_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes",
+      "market_slug": "russia-x-ukraine-ceasefire-by-june-30-2026",
+      "market_question": "Russia x Ukraine ceasefire by June 30, 2026?",
+      "side": "YES",
+      "shares": 31.664580725907385,
+      "cost_basis": 7.4411764705882355,
+      "avg_entry_price": 0.23500000000000001,
+      "current_price": 0.255,
+      "opened_at": "2026-02-13T10:18:12.251698400Z"
+    }
+  },
+  "resolved": [
+    {
+      "condition_id": "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b",
+      "token_id": "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b_no",
+      "market_question": "Will Bangladesh Nationalist Party win the most seats in the Bangladesh parliamentary election?",
+      "side": "NO",
+      "shares": 1000.0,
+      "cost_basis": 5.0,
+      "avg_entry_price": 0.005,
+      "resolution_price": 0.0,
+      "realized_pnl": -5.0,
+      "opened_at": "2026-02-13T10:18:10.256754600Z",
+      "resolved_at": "2026-02-13T22:18:09.947901Z",
+      "outcome": "LOST"
+    },
+    {
+      "condition_id": "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab",
+      "token_id": "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab_no",
+      "market_question": "Dubai Duty Free Tennis Championships, Qualification: Ella Seidel vs Anastasia Potapova",
+      "side": "NO",
+      "shares": 10000.0,
+      "cost_basis": 5.0,
+      "avg_entry_price": 0.0005,
+      "resolution_price": 0.0,
+      "realized_pnl": -5.0,
+      "opened_at": "2026-02-13T10:32:49.658696400Z",
+      "resolved_at": "2026-02-13T22:18:10.460104800Z",
+      "outcome": "LOST"
+    }
+  ],
+  "alerted_resolutions": [
+    "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b_no",
+    "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab_no"
+  ],
+  "last_updated": "2026-02-13T22:19:11.374120300Z"
+}

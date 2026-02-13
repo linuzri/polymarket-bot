@@ -1,0 +1,19 @@
+Automated Polymarket trading bot
+
+Usage: polymarket-bot.exe <COMMAND>
+
+Commands:
+  markets    List active markets with volume and pricing
+  market     Get detailed info about a specific market
+  book       Get the order book for a market
+  stream     Stream live price updates via WebSocket
+  account    Show account balance and positions
+  run        Run the automated strategy engine
+  buy        Buy shares on a market (real order)
+  sell       Sell shares on a market (real order)
+  paper      Paper trading commands
+  portfolio  Show real portfolio: open positions, resolved, P/L
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

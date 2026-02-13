@@ -1,0 +1,33 @@
+[2m2026-02-13T22:18:09.206478Z[0m [32m INFO[0m [2mpolymarket_bot::api::client[0m[2m:[0m Loaded CLOB API credentials for 0x7ec329D34D2c94456c015B236EBEc41d2a7B3Bce
+[2m2026-02-13T22:18:10.460192Z[0m [32m INFO[0m [2mpolymarket_bot::notifications[0m[2m:[0m Telegram notifications enabled
+
+======================================================================
+  PORTFOLIO SUMMARY  |  2026-02-13 22:18 UTC
+======================================================================
+
+  OPEN POSITIONS (4):
+  Market                                  Side   Entry     Now  Unrl P/L
+  --------------------------------------------------------------------
+  Russia x Ukraine ceasefire by Jun...     YES 0.2350 0.2550    +$0.32
+    15.83 shares | Cost: $3.72 | Value: $4.04
+  Will Trump nominate Jerome Powell...     YES 0.0015 0.0005    -$0.85
+    852.94 shares | Cost: $1.28 | Value: $0.43
+  Will Trump nominate Kevin Warsh a...      NO 0.0565 0.0415    -$1.33
+    88.50 shares | Cost: $5.00 | Value: $3.67
+  Will Netflix close Warner Bros ac...      NO 0.5250 0.5450    +$0.19
+    9.52 shares | Cost: $5.00 | Value: $5.19
+
+  RESOLVED POSITIONS (2):
+  Market                                  Side   Entry   Resol       P/L
+  --------------------------------------------------------------------
+  Will Bangladesh Nationalist Party...      NO 0.0050 0.0000    -$5.00 [LOST]
+  Dubai Duty Free Tennis Championsh...      NO 0.0005 0.0000    -$5.00 [LOST]
+
+  --------------------------------------------------------------------
+  Total Invested:    $15.00
+  Current Value:     $13.33
+  Unrealized P/L:    $-1.67
+  Realized P/L:      $-10.00
+  Total P/L:         $-11.67
+======================================================================
+

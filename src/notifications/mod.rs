@@ -80,6 +80,22 @@ impl TelegramNotifier {
         self.send(&msg).await;
     }
 
+    /// Notify about a sell order (auto-sell)
+    pub async fn notify_sell(&self, market: &str, side: &str, entry_price: f64, sell_price: f64, shares: f64, pnl: f64, reason: &str, dry_run: bool) {
+        let mode = if dry_run { "DRY RUN" } else { "LIVE" };
+        let pnl_sign = if pnl >= 0.0 { "+" } else { "" };
+        let msg = format!(
+            "<b>Auto-Sell ({})</b>\n\
+             Market: {}\n\
+             SELL {} | {:.2} shares\n\
+             Entry: ${:.4} -> Sell: ${:.4}\n\
+             P/L: {}${:.2}\n\
+             Reason: {}",
+            mode, html_escape(market), side, shares, entry_price, sell_price, pnl_sign, pnl, html_escape(reason)
+        );
+        self.send(&msg).await;
+    }
+
     /// Notify about an error
     pub async fn notify_error(&self, context: &str, error: &str) {
         let msg = format!(

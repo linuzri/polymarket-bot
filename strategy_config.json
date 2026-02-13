@@ -18,6 +18,12 @@
         "min_confidence": 0.3,
         "delay_between_calls_ms": 200
     },
+    "auto_sell": {
+        "enabled": true,
+        "take_profit_pct": 0.50,
+        "stop_loss_pct": 0.30,
+        "check_edge": false
+    },
     "telegram": {
         "enabled": true,
         "notify_signals": true,
