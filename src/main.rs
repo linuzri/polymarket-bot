@@ -4,6 +4,7 @@ mod models;
 mod notifications;
 mod orders;
 mod paper;
+mod portfolio;
 mod strategy;
 mod signals;
 
@@ -85,6 +86,8 @@ enum Commands {
         #[command(subcommand)]
         action: PaperCommands,
     },
+    /// Show real portfolio: open positions, resolved, P/L
+    Portfolio,
 }
 
 #[derive(Subcommand)]
@@ -300,6 +303,22 @@ async fn main() -> Result<()> {
         }
         Commands::Paper { action } => {
             handle_paper(action, &client).await?;
+        }
+        Commands::Portfolio => {
+            let mut state = portfolio::PortfolioState::load()?;
+            // Sync any trades from strategy log
+            portfolio::sync_from_trade_log(&mut state)?;
+            // Update current prices
+            portfolio::update_prices(&mut state, &client).await?;
+            // Check for resolutions
+            let resolved = portfolio::check_resolutions(&mut state, &client).await?;
+            if !resolved.is_empty() {
+                let notifier = notifications::TelegramNotifier::new();
+                portfolio::alert_resolutions(&resolved, &notifier).await;
+            }
+            state.save()?;
+            // Print summary
+            portfolio::print_summary(&state);
         }
     }
 

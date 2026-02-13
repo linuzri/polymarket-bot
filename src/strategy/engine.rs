@@ -57,6 +57,20 @@ impl StrategyEngine {
         })
     }
 
+    /// Check portfolio for resolutions and send alerts
+    async fn check_portfolio_resolutions(&self) -> Result<()> {
+        let mut state = crate::portfolio::PortfolioState::load()?;
+        crate::portfolio::sync_from_trade_log(&mut state)?;
+        crate::portfolio::update_prices(&mut state, &crate::api::client::PolymarketClient::new()?).await?;
+        let resolved = crate::portfolio::check_resolutions(&mut state, &crate::api::client::PolymarketClient::new()?).await?;
+        if !resolved.is_empty() {
+            info!("Detected {} resolved market(s)", resolved.len());
+            crate::portfolio::alert_resolutions(&resolved, &self.notifier).await;
+        }
+        state.save()?;
+        Ok(())
+    }
+
     /// Run one cycle of the strategy
     pub async fn run_cycle(&mut self) -> Result<()> {
         let mode = if self.dry_run { "DRY RUN" } else { "LIVE" };
@@ -204,8 +218,13 @@ impl StrategyEngine {
         }
 
         // Summary
-        println!("\n📋 Portfolio: {} open positions | ${:.2} exposure",
+        println!("\n  Portfolio: {} open positions | ${:.2} exposure",
             self.trade_log.open_position_count(), self.trade_log.total_exposure());
+
+        // Check for resolved markets in portfolio
+        if let Err(e) = self.check_portfolio_resolutions().await {
+            warn!("Portfolio resolution check failed: {}", e);
+        }
 
         Ok(())
     }
