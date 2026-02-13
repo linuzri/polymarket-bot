@@ -1,14 +1,22 @@
 # 🎯 Polymarket Trading Bot
 
-Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust.
+Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **Claude 3.5 Haiku** as an AI evaluator to find edge against market prices.
+
+## 🔴 Live Trading Status
+
+- **Balance:** ~$99 USDC deposited (real money)
+- **Trades placed:** 4 confirmed
+- **Telegram notifications:** Active (signals, trades, errors)
 
 ## Features
 
-- **Market Browser** — Search and browse active prediction markets
-- **Order Book** — View real-time L2 order book data
-- **Real Trading** — Place buy/sell orders with EIP-712 signed authentication
+- **AI Evaluator** — Claude 3.5 Haiku evaluates each market's true probability vs market price to find edge
+- **Market Scanner** — Fetches 198 markets (top volume + fast-resolving sorted by 24h volume)
+- **Fast-Resolving Priority** — Sports, crypto daily, esports markets evaluated first (resolve quickly = faster feedback)
+- **Live Trading** — Real money orders with EIP-712 signed authentication
 - **Paper Trading** — Practice with $1,000 virtual balance
-- **Strategy Engine** — Automated value betting with risk management
+- **Telegram Alerts** — Notifications for signals, executed trades, and errors
+- **Risk Management** — Kelly criterion sizing with conservative limits
 - **Portfolio Tracking** — View balance, positions, and trade history
 
 ## Quick Start
@@ -17,6 +25,7 @@ Automated prediction market trading bot for [Polymarket](https://polymarket.com)
 - [Rust](https://rustup.rs/) (1.75+)
 - Polymarket account with funds deposited
 - API credentials (derived via `py_clob_client`)
+- Anthropic API key (for Claude evaluator)
 
 ### Setup
 
@@ -34,6 +43,9 @@ POLY_PRIVATE_KEY=<your-private-key>
 POLY_API_KEY=<clob-api-key>
 POLY_API_SECRET=<clob-api-secret>
 POLY_PASSPHRASE=<clob-passphrase>
+ANTHROPIC_API_KEY=<claude-api-key>
+TELEGRAM_BOT_TOKEN=<telegram-bot-token>
+TELEGRAM_CHAT_ID=<your-chat-id>
 ```
 
 3. Derive API credentials (one-time):
@@ -56,7 +68,7 @@ cargo run -- markets -q "trump" -l 10
 # View market details
 cargo run -- market <market-slug>
 
-# Check account balance
+# Check account balance & positions
 cargo run -- account
 
 # Buy shares (dry run first!)
@@ -66,8 +78,9 @@ cargo run -- buy <slug> yes 5  # real trade
 # Sell shares
 cargo run -- sell <slug> yes 10 --dry-run
 
-# Run strategy engine (dry run)
-cargo run -- run --dry-run
+# Run automated strategy engine
+cargo run -- run --dry-run    # paper mode
+cargo run -- run              # live trading
 
 # Paper trading
 cargo run -- paper buy <slug> yes 10
@@ -77,22 +90,24 @@ cargo run -- paper history
 
 ## Strategy Engine
 
-The bot uses a **value betting strategy**:
+The bot uses an **AI-powered value betting strategy**:
 
-1. **Scan** — Fetches active markets with good volume (>$10K)
-2. **Evaluate** — Estimates true probability using heuristics
-3. **Signal** — Identifies markets where our estimate diverges from market price
-4. **Risk Check** — Applies Kelly criterion sizing with conservative limits
-5. **Execute** — Places orders on identified opportunities
+1. **Scan** — Fetches 198 active markets (top volume + fast-resolving by 24h volume)
+2. **Prioritize** — Fast-resolving markets first (sports, crypto daily, esports)
+3. **AI Evaluate** — Claude 3.5 Haiku estimates true probability for each market
+4. **Signal** — Identifies markets where AI estimate diverges from market price by ≥ min edge
+5. **Risk Check** — Applies Kelly criterion sizing with conservative limits
+6. **Execute** — Places orders and sends Telegram notification
+7. **Notify** — Telegram alerts for signals, trades, and errors
 
-### Risk Management
-| Parameter | Default |
-|-----------|---------|
-| Max trade size | $5 |
+### Strategy Configuration
+| Parameter | Value |
+|-----------|-------|
+| Max trade size | **$5** |
 | Max open positions | 10 |
-| Max total exposure | $20 |
-| Minimum edge | 10% |
-| Kelly fraction | 0.25 (quarter Kelly) |
+| Max total exposure | **$50** |
+| Minimum edge | **10%** |
+| Kelly fraction | **0.25** (quarter Kelly) |
 | Min market volume | $10,000 |
 | Min hours to close | 24h |
 
@@ -101,9 +116,9 @@ Configure in `strategy_config.json`.
 ## Architecture
 
 ```
-Scanner ─→ Evaluator ─→ Signal Generator ─→ Risk Check ─→ Execution
-   ↑                                                          ↓
-   └──────────── Position Monitor ←── Trade Logger ←──────────┘
+Scanner ─→ AI Evaluator (Claude 3.5 Haiku) ─→ Signal Generator ─→ Risk Check ─→ Execution
+   ↑                                                                               ↓
+   └──────────── Position Monitor ←── Trade Logger ←── Telegram Notifier ←─────────┘
 ```
 
 ### Auth Flow
@@ -113,6 +128,7 @@ Scanner ─→ Evaluator ─→ Signal Generator ─→ Risk Check ─→ Execut
 
 ## Tech Stack
 - **Rust** — Core bot logic
+- **Claude 3.5 Haiku** — AI market evaluation (via Anthropic API)
 - **alloy** — Ethereum primitives, EIP-712 signing
 - **reqwest** — HTTP client
 - **serde** — JSON serialization
@@ -126,11 +142,13 @@ Scanner ─→ Evaluator ─→ Signal Generator ─→ Risk Check ─→ Execut
 | Market browser | ✅ Working |
 | Order book viewer | ✅ Working |
 | Auth (L2 HMAC + EIP-712) | ✅ Working |
-| Buy/Sell orders | ✅ Working (first trade executed!) |
+| Buy/Sell orders | ✅ Working |
 | Paper trading | ✅ Working |
-| Strategy engine | 🔨 Building |
-| Telegram notifications | 📋 Planned |
-| News-driven signals | 📋 Planned |
+| AI Evaluator (Claude) | ✅ Working |
+| Strategy engine | ✅ Live |
+| Telegram notifications | ✅ Working |
+| Fast-resolving scanner | ✅ Working |
+| Live trading | ✅ **4 trades placed** |
 
 ## License
 Private — not for redistribution.
@@ -138,4 +156,3 @@ Private — not for redistribution.
 ## Links
 - [Polymarket](https://polymarket.com)
 - [Polymarket CLOB Docs](https://docs.polymarket.com)
-- [Dashboard](https://trade-bot-hq.vercel.app) (MT5 trading dashboard)

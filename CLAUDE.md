@@ -1,7 +1,14 @@
 # CLAUDE.md - Polymarket Bot
 
 ## Project Overview
-Automated Polymarket prediction market trading bot built in Rust.
+Automated Polymarket prediction market trading bot built in Rust. Uses Claude 3.5 Haiku as AI evaluator to find edge vs market prices. **Live trading enabled** with real money.
+
+## Current Status (Feb 13, 2026)
+- **Balance:** ~$99 USDC (deposited $100 via Bitcoin Feb 12)
+- **Trades:** 4 confirmed live trades placed
+- **Telegram:** Notifications active for signals, trades, errors
+- **Scanner:** 198 markets (top volume + fast-resolving by 24h volume)
+- **Strategy:** $5 max trade, $50 max exposure, 10% min edge, 25% Kelly fraction
 
 ## Architecture
 ```
@@ -20,11 +27,12 @@ polymarket-bot/
 │   │   └── mod.rs          # Paper trading engine ($1000 virtual)
 │   ├── strategy/
 │   │   ├── mod.rs          # Strategy module
-│   │   ├── scanner.rs      # Market scanner
-│   │   ├── evaluator.rs    # Probability evaluator (heuristic)
+│   │   ├── scanner.rs      # Market scanner (198 markets, fast-resolving priority)
+│   │   ├── evaluator.rs    # AI evaluator (Claude 3.5 Haiku)
 │   │   ├── risk.rs         # Risk manager (Kelly criterion)
 │   │   ├── engine.rs       # Main strategy loop
-│   │   └── logger.rs       # Trade logging
+│   │   ├── logger.rs       # Trade logging
+│   │   └── telegram.rs     # Telegram notifications
 │   ├── signals/
 │   │   └── mod.rs          # Signal types
 │   └── main.rs             # CLI entry point
@@ -36,6 +44,12 @@ polymarket-bot/
 ```
 
 ## Key Concepts
+
+### AI Evaluator
+- Claude 3.5 Haiku evaluates each market's true probability
+- Compares AI estimate vs market price to find edge
+- Fast-resolving markets prioritized (sports, crypto daily, esports)
+- Minimum 10% edge required to generate signal
 
 ### Authentication
 - **L1 Auth**: EIP-712 signed message (for deriving API keys)
@@ -56,14 +70,7 @@ polymarket-bot/
 ### APIs
 - **Gamma API**: `https://gamma-api.polymarket.com` — Market data, search
 - **CLOB API**: `https://clob.polymarket.com` — Auth, orders, balance, trades
-
-### Order Flow
-1. Fetch market from Gamma API (get token_id, neg_risk)
-2. Fetch order book from CLOB API (get best price)
-3. Get fee rate for maker address
-4. Build order (calculate maker/taker amounts)
-5. Sign order (EIP-712 with domain separator)
-6. POST to /order with L2 HMAC auth headers
+- **Anthropic API**: Claude 3.5 Haiku for market evaluation
 
 ## Environment Variables (.env)
 ```
@@ -73,6 +80,9 @@ POLY_PRIVATE_KEY=<Private key with 0x prefix>
 POLY_API_KEY=<CLOB API key>
 POLY_API_SECRET=<CLOB API secret (base64)>
 POLY_PASSPHRASE=<CLOB passphrase>
+ANTHROPIC_API_KEY=<Claude API key>
+TELEGRAM_BOT_TOKEN=<Telegram bot token>
+TELEGRAM_CHAT_ID=<Chat ID for notifications>
 ```
 
 ## CLI Commands
@@ -96,15 +106,11 @@ cargo run -- paper buy/sell/portfolio/history/reset
 - **balance-allowance returns 0**: Use `asset_type=COLLATERAL` and `signature_type=1` (not 2)
 - **PowerShell git push "errors"**: stderr output from git is normal, push succeeds
 
-## Strategy Engine
-- **Value Betting**: Heuristic-based probability estimation vs market price
-- **Risk Management**: Kelly criterion, max $5/trade, max 10 positions, max $20 exposure
-- **Config**: `strategy_config.json` — start with `dry_run: true`
-- **Scan interval**: 5 minutes
-
 ## Development Notes
 - Always test with `--dry-run` before real trades
 - Never commit .env file
 - Use `cargo run -- account` to verify balance before trading
 - The py_clob_client Python package is useful for debugging auth issues
 - Salt generation: `timestamp * random()` (matches Python client)
+- Fast-resolving market prioritization: sports > crypto daily > esports > politics
+- Telegram notifications go to configured chat for all signals, trades, and errors
