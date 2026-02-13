@@ -92,8 +92,19 @@ impl StrategyEngine {
             return Ok(());
         }
 
-        // Sort by edge descending
-        signals.sort_by(|a, b| b.edge.partial_cmp(&a.edge).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort: fast-resolving markets first, then by edge descending
+        let now = Utc::now();
+        signals.sort_by(|a, b| {
+            let hours_a = a.market.end_date.map(|d| (d - now).num_hours()).unwrap_or(9999);
+            let hours_b = b.market.end_date.map(|d| (d - now).num_hours()).unwrap_or(9999);
+            let fast_a = hours_a < 48;
+            let fast_b = hours_b < 48;
+            match (fast_a, fast_b) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => b.edge.partial_cmp(&a.edge).unwrap_or(std::cmp::Ordering::Equal),
+            }
+        });
 
         // 3. Get bankroll
         let bankroll = if self.dry_run {

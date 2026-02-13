@@ -64,9 +64,21 @@ impl AiEvaluator {
     pub async fn evaluate_batch(&self, candidates: &[CandidateMarket]) -> Vec<Signal> {
         let mut signals = Vec::new();
 
-        // Take top N by volume
+        // Sort: fast-resolving markets first (< 48h), then by volume
+        let now = chrono::Utc::now();
         let mut sorted: Vec<&CandidateMarket> = candidates.iter().collect();
-        sorted.sort_by(|a, b| b.volume.partial_cmp(&a.volume).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            let hours_a = a.end_date.map(|d| (d - now).num_hours()).unwrap_or(9999);
+            let hours_b = b.end_date.map(|d| (d - now).num_hours()).unwrap_or(9999);
+            let fast_a = hours_a < 48;
+            let fast_b = hours_b < 48;
+            // Fast-resolving markets first, then by volume within each group
+            match (fast_a, fast_b) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => b.volume.partial_cmp(&a.volume).unwrap_or(std::cmp::Ordering::Equal),
+            }
+        });
         let batch = &sorted[..sorted.len().min(self.config.max_markets_per_cycle)];
 
         for (i, candidate) in batch.iter().enumerate() {
@@ -97,6 +109,13 @@ impl AiEvaluator {
 
     async fn evaluate_one(&self, market: &CandidateMarket) -> Result<Option<Signal>> {
         let category = market.category.as_deref().unwrap_or("Unknown");
+        let end_date_str = market.end_date
+            .map(|d| {
+                let hours = (d - chrono::Utc::now()).num_hours();
+                format!("End date: {} ({} hours from now)", d.format("%Y-%m-%d %H:%M UTC"), hours)
+            })
+            .unwrap_or_else(|| "End date: Unknown".to_string());
+
         let prompt = format!(
 r#"You are a prediction market analyst. Estimate the probability that the following event will happen.
 
@@ -105,6 +124,13 @@ Current YES price: {:.2} (market thinks {:.0}% likely)
 Current NO price: {:.2}
 Volume: ${:.0}
 Category: {}
+{}
+
+IMPORTANT GUIDELINES:
+- Markets resolving within 48 hours (sports, crypto daily prices, esports) are HIGH PRIORITY — be MORE confident on these since outcomes are more predictable with current data
+- Sports and esports outcomes: you can be more confident (0.6-0.9) when you have clear knowledge
+- Long-dated political/geopolitical markets (weeks/months away): be LESS confident (0.2-0.5) since uncertainty is higher
+- Prefer actionable calls on fast-resolving markets over cautious calls on slow ones
 
 Based on your knowledge, what is the TRUE probability this event resolves YES?
 
@@ -120,6 +146,7 @@ Where:
             market.no_price,
             market.volume,
             category,
+            end_date_str,
         );
 
         let body = serde_json::json!({

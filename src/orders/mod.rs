@@ -3,7 +3,7 @@ use alloy::primitives::{Address, FixedBytes, U256, keccak256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
 use serde_json::json;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Contract addresses
 const EXCHANGE: &str = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
@@ -256,7 +256,21 @@ pub async fn place_order(
     };
     info!("Fee rate: {} bps", fee_rate_bps);
 
+    // Minimum trade size check: skip trades smaller than $0.50
+    let trade_value = price * size;
+    if trade_value < 0.50 {
+        warn!("Trade value ${:.4} is below minimum $0.50 — skipping (price={}, size={})", trade_value, price, size);
+        anyhow::bail!("Trade value ${:.4} is below minimum $0.50", trade_value);
+    }
+
     let order = Order::new(proxy_wallet, eoa_wallet, token_id, side, price, size, fee_rate_bps)?;
+
+    // Verify maker and taker amounts are > 0
+    if order.maker_amount == U256::ZERO || order.taker_amount == U256::ZERO {
+        warn!("Order amounts rounded to zero — skipping (maker={}, taker={})", order.maker_amount, order.taker_amount);
+        anyhow::bail!("Order amounts rounded to zero (maker={}, taker={})", order.maker_amount, order.taker_amount);
+    }
+
     info!(
         "Order: {} {} shares @ ${:.4} (maker={}, taker={})",
         side.as_str(),

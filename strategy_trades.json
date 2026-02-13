@@ -89,12 +89,31 @@
       "dry_run": false,
       "pnl": null,
       "closed": false
+    },
+    {
+      "id": "6e8f7c4a-4b53-4f39-83e9-819c396f3dd5",
+      "timestamp": "2026-02-13T11:44:58.413503100Z",
+      "condition_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266",
+      "market_slug": "will-trump-nominate-jerome-powell-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Jerome Powell as the next Fed chair?",
+      "side": "YES",
+      "action": "BUY",
+      "price": 0.0015,
+      "size_usd": 1.279411764705884,
+      "shares": 852.9411764705893,
+      "edge": 0.1985,
+      "confidence": 0.65,
+      "reason": "Powell is currently serving as Fed chair and has generally performed competently from Trump's perspective, but Trump has publicly criticized Powell in the past. Biden would likely prefer to keep Powell, which complicates Trump's potential renomination if he were to win in 2024.",
+      "dry_run": false,
+      "pnl": null,
+      "closed": false
     }
   ],
   "open_positions": {
     "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093": 3.7205882352941178,
-    "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b": 5.0,
+    "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab": 5.0,
+    "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266": 1.279411764705884,
     "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c": 5.0,
-    "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab": 5.0
+    "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b": 5.0
   }
 }

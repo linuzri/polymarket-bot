@@ -3,8 +3,8 @@
     "scan_interval_secs": 300,
     "risk": {
         "max_trade_size": 5.0,
-        "max_positions": 10,
-        "max_total_exposure": 20.0,
+        "max_positions": 15,
+        "max_total_exposure": 50.0,
         "min_edge": 0.10,
         "min_volume": 10000.0,
         "min_hours_to_close": 2.0,
