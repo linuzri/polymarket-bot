@@ -1,0 +1,23 @@
+{
+  "trades": [
+    {
+      "id": "069ea3f0-9cbe-4282-9467-1d203e2a8ace",
+      "timestamp": "2026-02-13T09:30:12.698822900Z",
+      "condition_id": "0x017f4439040a7454b7ae33d9f56f9cd22f7b2f58bb3e24b0671d9eee4d3b1645",
+      "market_slug": "will-netherlands-win-the-most-medals-in-the-2026-winter-olympics",
+      "market_question": "Will Netherlands win the most medals in the 2026 Winter Olympics?",
+      "side": "YES",
+      "action": "BUY",
+      "price": 0.0005,
+      "size_usd": 5.0,
+      "shares": 10000.0,
+      "edge": 0.1495,
+      "confidence": 0.6,
+      "reason": "Netherlands historically performs very well in speed skating at Winter Olympics, winning multiple medals. However, winning the most total medals is challenging against multi-discipline powerhouses like Norway and Germany.",
+      "dry_run": true,
+      "pnl": null,
+      "closed": false
+    }
+  ],
+  "open_positions": {}
+}

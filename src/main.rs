@@ -124,8 +124,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    // Load .env if present
-    dotenvy::dotenv().ok();
+    // Load .env if present (override system env vars)
+    dotenvy::dotenv_override().ok();
 
     let cli = Cli::parse();
     let client = api::client::PolymarketClient::new()?;
