@@ -7,7 +7,7 @@
         "max_total_exposure": 20.0,
         "min_edge": 0.10,
         "min_volume": 10000.0,
-        "min_hours_to_close": 24.0,
+        "min_hours_to_close": 2.0,
         "kelly_fraction": 0.25
     },
     "dry_run": false,

@@ -66,18 +66,19 @@ impl MarketScanner {
         }
     }
 
-    /// Scan for candidate markets
+    /// Scan for candidate markets (combines top volume + fast-resolving)
     pub async fn scan(&self, limit: usize) -> Result<Vec<CandidateMarket>> {
-        let url = format!(
+        // Fetch 1: Top volume markets
+        let url1 = format!(
             "{}/markets?closed=false&active=true&order=volume&ascending=false&limit={}",
             self.gamma_url,
             limit.min(200)
         );
 
-        debug!("Scanning markets: {}", url);
+        debug!("Scanning top volume markets: {}", url1);
 
-        let raw: Vec<GammaScanMarket> = self.http
-            .get(&url)
+        let mut raw: Vec<GammaScanMarket> = self.http
+            .get(&url1)
             .send()
             .await
             .context("Failed to fetch markets for scanning")?
@@ -85,7 +86,31 @@ impl MarketScanner {
             .await
             .context("Failed to parse scan response")?;
 
-        info!("🔍 Fetched {} raw markets", raw.len());
+        // Fetch 2: Recent/fast-resolving markets (sorted by 24h volume)
+        let url2 = format!(
+            "{}/markets?closed=false&active=true&order=volume24hr&ascending=false&limit=100",
+            self.gamma_url
+        );
+
+        if let Ok(resp) = self.http.get(&url2).send().await {
+            if let Ok(fast_markets) = resp.json::<Vec<GammaScanMarket>>().await {
+                // Add markets not already in the list (by condition_id)
+                let existing: std::collections::HashSet<String> = raw.iter()
+                    .filter_map(|m| m.condition_id.clone())
+                    .collect();
+                let before = raw.len();
+                for m in fast_markets {
+                    if let Some(ref cid) = m.condition_id {
+                        if !existing.contains(cid) {
+                            raw.push(m);
+                        }
+                    }
+                }
+                info!("Fetched {} additional fast-resolving markets", raw.len() - before);
+            }
+        }
+
+        info!("Fetched {} total raw markets", raw.len());
 
         let now = Utc::now();
         let mut candidates = Vec::new();
