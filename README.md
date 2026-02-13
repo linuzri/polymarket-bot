@@ -1,93 +1,141 @@
-# 🎯 Polymarket Bot
+# 🎯 Polymarket Trading Bot
 
-Automated trading bot for [Polymarket](https://polymarket.com) prediction markets, built in Rust.
+Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust.
 
 ## Features
 
-- 📊 Browse and search live markets
-- 📖 View order books and pricing
-- 🔄 WebSocket streaming for real-time prices (coming soon)
-- 🤖 Automated trading strategies (coming soon)
-- 📱 Telegram notifications (coming soon)
+- **Market Browser** — Search and browse active prediction markets
+- **Order Book** — View real-time L2 order book data
+- **Real Trading** — Place buy/sell orders with EIP-712 signed authentication
+- **Paper Trading** — Practice with $1,000 virtual balance
+- **Strategy Engine** — Automated value betting with risk management
+- **Portfolio Tracking** — View balance, positions, and trade history
 
 ## Quick Start
 
+### Prerequisites
+- [Rust](https://rustup.rs/) (1.75+)
+- Polymarket account with funds deposited
+- API credentials (derived via `py_clob_client`)
+
+### Setup
+
+1. Clone the repo:
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build
-cargo build --release
-
-# List hot markets
-cargo run -- markets
-
-# Search for BTC markets
-cargo run -- markets -q crypto
-
-# View a specific market
-cargo run -- market <slug>
-
-# View order book
-cargo run -- book <token_id>
+git clone https://github.com/linuzri/polymarket-bot.git
+cd polymarket-bot
 ```
+
+2. Create `.env` file:
+```env
+POLY_WALLET_ADDRESS=<your-eoa-wallet-address>
+POLY_PROXY_WALLET=<your-proxy-wallet-address>
+POLY_PRIVATE_KEY=<your-private-key>
+POLY_API_KEY=<clob-api-key>
+POLY_API_SECRET=<clob-api-secret>
+POLY_PASSPHRASE=<clob-passphrase>
+```
+
+3. Derive API credentials (one-time):
+```bash
+pip install py-clob-client
+python -c "
+from py_clob_client.client import ClobClient
+c = ClobClient('https://clob.polymarket.com', key='YOUR_PRIVATE_KEY', chain_id=137)
+creds = c.create_or_derive_api_creds()
+print(creds)
+"
+```
+
+### Usage
+
+```bash
+# Browse markets
+cargo run -- markets -q "trump" -l 10
+
+# View market details
+cargo run -- market <market-slug>
+
+# Check account balance
+cargo run -- account
+
+# Buy shares (dry run first!)
+cargo run -- buy <slug> yes 5 --dry-run
+cargo run -- buy <slug> yes 5  # real trade
+
+# Sell shares
+cargo run -- sell <slug> yes 10 --dry-run
+
+# Run strategy engine (dry run)
+cargo run -- run --dry-run
+
+# Paper trading
+cargo run -- paper buy <slug> yes 10
+cargo run -- paper portfolio
+cargo run -- paper history
+```
+
+## Strategy Engine
+
+The bot uses a **value betting strategy**:
+
+1. **Scan** — Fetches active markets with good volume (>$10K)
+2. **Evaluate** — Estimates true probability using heuristics
+3. **Signal** — Identifies markets where our estimate diverges from market price
+4. **Risk Check** — Applies Kelly criterion sizing with conservative limits
+5. **Execute** — Places orders on identified opportunities
+
+### Risk Management
+| Parameter | Default |
+|-----------|---------|
+| Max trade size | $5 |
+| Max open positions | 10 |
+| Max total exposure | $20 |
+| Minimum edge | 10% |
+| Kelly fraction | 0.25 (quarter Kelly) |
+| Min market volume | $10,000 |
+| Min hours to close | 24h |
+
+Configure in `strategy_config.json`.
 
 ## Architecture
 
 ```
-src/
-├── main.rs          # CLI entry point
-├── api/             # Polymarket REST + WebSocket client
-│   ├── client.rs    # HTTP client for Gamma + CLOB APIs
-│   └── endpoints.rs # API endpoint constants
-├── models/          # Data structures
-│   └── market.rs    # Market, OrderBook, etc.
-├── strategy/        # Trading strategies (Phase 2)
-└── signals/         # News feeds, sentiment (Phase 2)
+Scanner ─→ Evaluator ─→ Signal Generator ─→ Risk Check ─→ Execution
+   ↑                                                          ↓
+   └──────────── Position Monitor ←── Trade Logger ←──────────┘
 ```
 
-## APIs Used
+### Auth Flow
+- **L2 HMAC**: API request authentication (balance, orders, trades)
+- **EIP-712**: Order signing for the CTF Exchange smart contract
+- **Proxy Wallet**: Funds held in Polymarket proxy wallet, signed by EOA
 
-- **Gamma API** (`gamma-api.polymarket.com`) — Market discovery, metadata
-- **CLOB API** (`clob.polymarket.com`) — Order book, trading, auth
-- **Data API** (`data-api.polymarket.com`) — Historical data
+## Tech Stack
+- **Rust** — Core bot logic
+- **alloy** — Ethereum primitives, EIP-712 signing
+- **reqwest** — HTTP client
+- **serde** — JSON serialization
+- **clap** — CLI argument parsing
+- **tokio** — Async runtime
 
-## Roadmap
+## Project Status
 
-### Phase 1: Data ✅
-- [x] Market listing and search
-- [x] Order book fetching
-- [ ] WebSocket real-time prices
-- [ ] Historical data collection
+| Component | Status |
+|-----------|--------|
+| Market browser | ✅ Working |
+| Order book viewer | ✅ Working |
+| Auth (L2 HMAC + EIP-712) | ✅ Working |
+| Buy/Sell orders | ✅ Working (first trade executed!) |
+| Paper trading | ✅ Working |
+| Strategy engine | 🔨 Building |
+| Telegram notifications | 📋 Planned |
+| News-driven signals | 📋 Planned |
 
-### Phase 2: Trading
-- [ ] L1/L2 authentication
-- [ ] Order placement (limit, market)
-- [ ] Position tracking
-- [ ] P/L calculation
+## License
+Private — not for redistribution.
 
-### Phase 3: Strategies
-- [ ] News arbitrage (react to breaking news)
-- [ ] Cross-market arbitrage
-- [ ] Liquidity provision
-- [ ] Sentiment-based trading
-
-### Phase 4: Operations
-- [ ] Telegram alerts
-- [ ] Dashboard integration
-- [ ] Risk management
-- [ ] Auto-rebalancing
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```bash
-cp .env.example .env
-```
-
-Edit `config.toml` for trading parameters.
-
-## ⚠️ Disclaimer
-
-This is experimental software for educational purposes. Trading on prediction markets involves risk. Use at your own discretion.
+## Links
+- [Polymarket](https://polymarket.com)
+- [Polymarket CLOB Docs](https://docs.polymarket.com)
+- [Dashboard](https://trade-bot-hq.vercel.app) (MT5 trading dashboard)
