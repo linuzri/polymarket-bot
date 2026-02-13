@@ -107,7 +107,7 @@ impl AiEvaluator {
         signals
     }
 
-    async fn evaluate_one(&self, market: &CandidateMarket) -> Result<Option<Signal>> {
+    pub async fn evaluate_one(&self, market: &CandidateMarket) -> Result<Option<Signal>> {
         let category = market.category.as_deref().unwrap_or("Unknown");
         let end_date_str = market.end_date
             .map(|d| {

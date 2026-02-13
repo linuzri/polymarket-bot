@@ -20,7 +20,20 @@ pub struct AutoSellConfig {
     /// Re-evaluate with AI to check if edge is gone (expensive)
     #[serde(default)]
     pub check_edge: bool,
+    /// Only re-evaluate positions older than this many hours
+    #[serde(default = "default_edge_check_interval")]
+    pub edge_check_interval_hours: f64,
+    /// Sell if AI confidence in our direction drops below this %
+    #[serde(default = "default_edge_confidence_threshold")]
+    pub edge_confidence_threshold: f64,
+    /// Max AI edge checks per cycle (to control API costs)
+    #[serde(default = "default_max_edge_checks")]
+    pub max_edge_checks_per_cycle: usize,
 }
+
+fn default_edge_check_interval() -> f64 { 24.0 }
+fn default_edge_confidence_threshold() -> f64 { 20.0 }
+fn default_max_edge_checks() -> usize { 5 }
 
 fn default_true() -> bool { true }
 fn default_take_profit() -> f64 { 0.50 }
@@ -33,6 +46,9 @@ impl Default for AutoSellConfig {
             take_profit_pct: 0.50,
             stop_loss_pct: 0.30,
             check_edge: false,
+            edge_check_interval_hours: 24.0,
+            edge_confidence_threshold: 20.0,
+            max_edge_checks_per_cycle: 5,
         }
     }
 }

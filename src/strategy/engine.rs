@@ -73,7 +73,98 @@ impl StrategyEngine {
         Ok(())
     }
 
-    /// Check open positions for auto-sell triggers (take profit, stop loss)
+    /// Re-evaluate a position using AI to check if edge is gone
+    /// Returns Some((reason, ai_probability)) if should sell, None if hold
+    async fn re_evaluate_position(
+        &self,
+        pos: &crate::portfolio::Position,
+        client: &crate::api::client::PolymarketClient,
+    ) -> Result<Option<(String, f64)>> {
+        let ai = self.ai_evaluator.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("AI evaluator not available"))?;
+
+        // Fetch current market data to build a CandidateMarket
+        let market = client.get_market(&pos.market_slug).await?;
+        let tokens = market.tokens.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No tokens for market"))?;
+        let (yes_token, no_token) = if tokens.len() >= 2 {
+            (tokens[0].clone(), tokens[1].clone())
+        } else {
+            anyhow::bail!("Market has fewer than 2 tokens");
+        };
+
+        let end_date = market.end_date.as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let candidate = super::scanner::CandidateMarket {
+            condition_id: pos.condition_id.clone(),
+            question: market.question.clone(),
+            description: market.description,
+            slug: pos.market_slug.clone(),
+            volume: market.volume,
+            yes_price: market.yes_price,
+            no_price: market.no_price,
+            yes_token_id: yes_token,
+            no_token_id: no_token,
+            end_date,
+            neg_risk: client.get_neg_risk(&pos.market_slug).await.unwrap_or(true),
+            category: None,
+        };
+
+        let threshold = self.config.auto_sell.edge_confidence_threshold / 100.0;
+
+        match ai.evaluate_one(&candidate).await {
+            Ok(Some(signal)) => {
+                let ai_prob = signal.estimated_probability;
+                let ai_confidence = signal.confidence;
+
+                // Check if AI says probability flipped against our position
+                let our_direction_prob = if pos.side == "YES" { ai_prob } else { 1.0 - ai_prob };
+
+                // If AI confidence in our direction dropped below threshold, sell
+                if our_direction_prob < threshold {
+                    let reason = format!(
+                        "Edge lost: AI estimates {:.0}% for {} (threshold {:.0}%) | confidence {:.0}% | {}",
+                        our_direction_prob * 100.0, pos.side,
+                        threshold * 100.0, ai_confidence * 100.0,
+                        signal.reason
+                    );
+                    return Ok(Some((reason, our_direction_prob)));
+                }
+
+                // If probability flipped against us vs entry price
+                // e.g., bought YES at 0.30, AI now says 0.20
+                let entry_implied = pos.avg_entry_price;
+                if our_direction_prob < entry_implied {
+                    let reason = format!(
+                        "Edge lost: AI now estimates {:.0}% for {} (was {:.0}% at entry) | {}",
+                        our_direction_prob * 100.0, pos.side,
+                        entry_implied * 100.0, signal.reason
+                    );
+                    return Ok(Some((reason, our_direction_prob)));
+                }
+
+                info!("Edge check HOLD: {} - AI {:.0}% for {} (entry {:.0}%)",
+                    truncate(&pos.market_question, 40),
+                    our_direction_prob * 100.0, pos.side,
+                    entry_implied * 100.0);
+                Ok(None)
+            }
+            Ok(None) => {
+                // AI returned no signal (low confidence) - hold
+                info!("Edge check HOLD (low AI confidence): {}",
+                    truncate(&pos.market_question, 40));
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Edge re-evaluation failed for {}: {}", truncate(&pos.market_question, 40), e);
+                Ok(None) // Don't sell on API errors
+            }
+        }
+    }
+
+    /// Check open positions for auto-sell triggers (take profit, stop loss, edge loss)
     async fn check_auto_sell(&self) -> Result<()> {
         let auto_sell = &self.config.auto_sell;
         if !auto_sell.enabled {
@@ -126,6 +217,61 @@ impl StrategyEngine {
             }
         }
 
+        // AI Edge re-evaluation check
+        if auto_sell.check_edge && self.ai_evaluator.is_some() {
+            let interval_hours = auto_sell.edge_check_interval_hours;
+            let max_checks = auto_sell.max_edge_checks_per_cycle;
+            let now = Utc::now();
+            let mut edge_checks_done = 0usize;
+
+            // Collect eligible positions (held longer than interval, not already in to_sell)
+            let already_selling: std::collections::HashSet<String> = to_sell.iter().map(|(k, _, _, _, _)| k.clone()).collect();
+
+            let eligible: Vec<(String, crate::portfolio::Position)> = state.positions.iter()
+                .filter(|(key, pos)| {
+                    if already_selling.contains(*key) {
+                        return false;
+                    }
+                    let hours_held = (now - pos.opened_at).num_minutes() as f64 / 60.0;
+                    hours_held >= interval_hours
+                })
+                .map(|(k, p)| (k.clone(), p.clone()))
+                .collect();
+
+            if !eligible.is_empty() {
+                info!("Edge check: {} positions eligible (>{:.0}h old), checking up to {}",
+                    eligible.len(), interval_hours, max_checks);
+            }
+
+            for (key, pos) in &eligible {
+                if edge_checks_done >= max_checks {
+                    info!("Edge check: hit max {} checks per cycle, stopping", max_checks);
+                    break;
+                }
+
+                edge_checks_done += 1;
+
+                if let Ok(Some((reason, ai_prob))) = self.re_evaluate_position(pos, &client).await {
+                    info!("AUTO-SELL [EDGE]: {} - {}", pos.market_question, reason);
+
+                    // Build edge-specific notification message
+                    let edge_msg = format!(
+                        "Edge Lost: {} | AI now estimates {:.0}% (was {:.0}% at entry) | Selling {:.2} shares",
+                        pos.market_question, ai_prob * 100.0,
+                        pos.avg_entry_price * 100.0, pos.shares
+                    );
+                    self.notifier.send(&edge_msg).await;
+
+                    to_sell.push((key.clone(), reason, pos.current_price, pos.shares, pos.side.clone()));
+                }
+
+                // Rate limit between AI calls
+                if edge_checks_done < max_checks {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+            }
+        }
+
         if to_sell.is_empty() {
             return Ok(());
         }
@@ -169,6 +315,13 @@ impl StrategyEngine {
 
             let neg_risk = client.get_neg_risk(&pos.market_slug).await.unwrap_or(true);
             let pnl = (actual_sell_price - pos.avg_entry_price) * shares;
+            let sell_value = actual_sell_price * shares;
+
+            // Skip if sell value is too small (CLOB min order ~$0.50)
+            if sell_value < 0.50 {
+                info!("Auto-sell skipped for {} -- value too small (${:.2})", pos.market_question, sell_value);
+                continue;
+            }
 
             println!("  SELL {} \"{}\"", side, pos.market_question);
             println!("     Entry: ${:.4} -> Sell: ${:.4} | {:.2} shares | P/L: ${:.2}", pos.avg_entry_price, actual_sell_price, shares, pnl);

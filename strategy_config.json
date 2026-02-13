@@ -22,7 +22,10 @@
         "enabled": true,
         "take_profit_pct": 0.50,
         "stop_loss_pct": 0.30,
-        "check_edge": false
+        "check_edge": false,
+        "edge_check_interval_hours": 24,
+        "edge_confidence_threshold": 20,
+        "max_edge_checks_per_cycle": 5
     },
     "telegram": {
         "enabled": true,
