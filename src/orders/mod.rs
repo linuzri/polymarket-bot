@@ -84,7 +84,8 @@ pub struct Order {
 }
 
 impl Order {
-    /// Build a new order
+    /// Build a new order with tick-size-aware rounding
+    /// tick_size: 0.1, 0.01, 0.001, or 0.0001
     pub fn new(
         maker: Address,
         signer: Address,
@@ -94,27 +95,55 @@ impl Order {
         size: f64,
         fee_rate_bps: u64,
     ) -> Result<Self> {
-        // Round price to 2 decimals, size down to 2 decimals
-        let price = (price * 100.0).round() / 100.0;
-        let size = (size * 100.0).floor() / 100.0;
+        Self::new_with_tick(maker, signer, token_id, side, price, size, fee_rate_bps, 0.01)
+    }
+
+    pub fn new_with_tick(
+        maker: Address,
+        signer: Address,
+        token_id: &str,
+        side: Side,
+        price: f64,
+        size: f64,
+        fee_rate_bps: u64,
+        tick_size: f64,
+    ) -> Result<Self> {
+        // Determine decimal precision from tick size
+        // tick 0.1 → price_decimals=1, amount_decimals=3
+        // tick 0.01 → price_decimals=2, amount_decimals=4
+        // tick 0.001 → price_decimals=3, amount_decimals=5
+        // tick 0.0001 → price_decimals=4, amount_decimals=6
+        let price_decimals = if tick_size <= 0.0001 { 4 }
+            else if tick_size <= 0.001 { 3 }
+            else if tick_size <= 0.01 { 2 }
+            else { 1 };
+        let amount_decimals = price_decimals + 2; // per ROUNDING_CONFIG
+
+        let price_mult = 10_f64.powi(price_decimals);
+        let price = (price * price_mult).round() / price_mult;
+        let size = (size * 100.0).floor() / 100.0; // size always 2 decimals
 
         if size <= 0.0 {
             anyhow::bail!("Size too small after rounding: {}", size);
         }
 
+        let amount_mult = 10_f64.powi(amount_decimals);
+        // USDC has 6 decimal base (1 USDC = 1_000_000 units)
+        let usdc_raw_mult = 1_000_000.0;
+        // Rounding step: round to `amount_decimals` decimals in USDC terms
+        let round_step = usdc_raw_mult / amount_mult;
+
         let (maker_amount, taker_amount) = match side {
             Side::Buy => {
-                // BUY: maker=USDC (max 5 decimals), taker=shares (max 2 decimals)
                 let usdc = size * price;
-                let maker = ((usdc * 1_000_000.0).round() / 10.0).floor() as u64 * 10; // 5 decimal precision
-                let taker = ((size * 100.0).floor() as u64) * 10_000; // 2 decimal precision
+                let maker = ((usdc * usdc_raw_mult / round_step).round() as u64) * (round_step as u64);
+                let taker = ((size * 100.0).floor() as u64) * 10_000;
                 (U256::from(maker), U256::from(taker))
             }
             Side::Sell => {
-                // SELL: maker=shares (max 2 decimals), taker=USDC (max 5 decimals)  
                 let usdc = size * price;
-                let maker = ((size * 100.0).floor() as u64) * 10_000; // 2 decimal precision
-                let taker = ((usdc * 1_000_000.0).round() / 10.0).floor() as u64 * 10; // 5 decimal precision
+                let maker = ((size * 100.0).floor() as u64) * 10_000;
+                let taker = ((usdc * usdc_raw_mult / round_step).round() as u64) * (round_step as u64);
                 (U256::from(maker), U256::from(taker))
             }
         };
@@ -226,7 +255,7 @@ fn addr_to_bytes32(addr: Address) -> [u8; 32] {
     padded
 }
 
-/// Build, sign, and optionally post an order
+/// Build, sign, and optionally post an order (default tick_size 0.01)
 pub async fn place_order(
     client: &crate::api::client::PolymarketClient,
     token_id: &str,
@@ -235,6 +264,20 @@ pub async fn place_order(
     size: f64,
     neg_risk: bool,
     dry_run: bool,
+) -> Result<serde_json::Value> {
+    place_order_with_tick(client, token_id, side, price, size, neg_risk, dry_run, 0.01).await
+}
+
+/// Build, sign, and optionally post an order with specific tick size
+pub async fn place_order_with_tick(
+    client: &crate::api::client::PolymarketClient,
+    token_id: &str,
+    side: Side,
+    price: f64,
+    size: f64,
+    neg_risk: bool,
+    dry_run: bool,
+    tick_size: f64,
 ) -> Result<serde_json::Value> {
     let private_key = std::env::var("POLY_PRIVATE_KEY")
         .context("POLY_PRIVATE_KEY not set in .env")?;
@@ -269,7 +312,7 @@ pub async fn place_order(
         anyhow::bail!("Trade value ${:.4} is below minimum $0.50", trade_value);
     }
 
-    let order = Order::new(proxy_wallet, eoa_wallet, token_id, side, price, size, fee_rate_bps)?;
+    let order = Order::new_with_tick(proxy_wallet, eoa_wallet, token_id, side, price, size, fee_rate_bps, tick_size)?;
 
     // Verify maker and taker amounts are > 0
     if order.maker_amount == U256::ZERO || order.taker_amount == U256::ZERO {

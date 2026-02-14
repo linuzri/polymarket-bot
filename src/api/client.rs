@@ -152,6 +152,16 @@ impl PolymarketClient {
         Ok(response.into())
     }
 
+    /// Get tick size for a market from CLOB API
+    pub async fn get_tick_size(&self, condition_id: &str) -> Result<f64> {
+        let url = format!("{}/markets/{}", self.clob_url, condition_id);
+        let resp: serde_json::Value = self.http.get(&url).send().await?.json().await?;
+        let tick = resp.get("minimum_tick_size")
+            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .unwrap_or(0.01);
+        Ok(tick)
+    }
+
     /// Get mid price for a token
     pub async fn get_price(&self, token_id: &str) -> Result<f64> {
         let url = format!(

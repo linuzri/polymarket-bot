@@ -17,8 +17,8 @@ const SCAN_INTERVAL_SECS: u64 = 30;
 // --- Sniper constants ---
 /// Minimum price to consider "near-resolved" (99%+ certainty, Anjun-style)
 const SNIPER_MIN_PRICE: f64 = 0.95;
-/// Maximum price we'll pay (99¢ — CLOB rounds to 2 decimals, $1.00 is rejected)
-const SNIPER_MAX_PRICE: f64 = 0.99;
+/// Maximum price we'll pay (99.9¢ for 0.001 tick markets, 99¢ for 0.01 tick)
+const SNIPER_MAX_PRICE: f64 = 0.999;
 /// Maximum USD per sniper trade (bigger size = more profit per trade)
 const SNIPER_MAX_SIZE: f64 = 30.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
@@ -49,6 +49,7 @@ pub struct SniperOpportunity {
     pub expected_profit_pct: f64, // (1.0 - ask_price) / ask_price
     pub neg_risk: bool,
     pub volume: f64,
+    pub tick_size: f64,
 }
 
 /// Raw Gamma API market
@@ -332,12 +333,17 @@ impl ArbScanner {
             return None;
         };
 
+        // Fetch tick size to determine max price precision
+        let tick_size = client.get_tick_size(cid).await.unwrap_or(0.01);
+        // Max price depends on tick size: 0.001 tick → max 0.999, 0.01 tick → max 0.99
+        let effective_max = if tick_size <= 0.001 { SNIPER_MAX_PRICE } else { 0.99 };
+
         // Check order book for actual ask price
         let book = client.get_order_book(&tokens[token_idx]).await.ok()?;
         let ask_price = book.asks.first().map(|a| a.price)?;
 
         // Must be within our buy range
-        if ask_price < SNIPER_MIN_PRICE || ask_price > SNIPER_MAX_PRICE {
+        if ask_price < SNIPER_MIN_PRICE || ask_price > effective_max {
             return None;
         }
 
@@ -354,6 +360,7 @@ impl ArbScanner {
             expected_profit_pct,
             neg_risk: market.neg_risk.unwrap_or(true),
             volume,
+            tick_size,
         })
     }
 
@@ -382,7 +389,7 @@ impl ArbScanner {
         }
 
         let client = PolymarketClient::new()?;
-        match orders::place_order(&client, &opp.token_id, orders::Side::Buy, opp.ask_price, shares, opp.neg_risk, false).await {
+        match orders::place_order_with_tick(&client, &opp.token_id, orders::Side::Buy, opp.ask_price, shares, opp.neg_risk, false, opp.tick_size).await {
             Ok(_) => {
                 info!("Sniper order placed: {} {} @ ${:.4}", opp.side, shares, opp.ask_price);
                 self.sniper_trades += 1;
