@@ -1,23 +1,27 @@
 # 🎯 Polymarket Trading Bot
 
-Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **Claude 3.5 Haiku** as an AI evaluator to find edge against market prices.
+Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses a **two-tier AI evaluator** (Claude 3.5 Haiku + Claude Sonnet 4) and an **arbitrage scanner** to find profitable trades.
 
 ## 🔴 Live Trading Status
 
-- **Balance:** ~$99 USDC deposited (real money)
-- **Trades placed:** 4 confirmed
-- **Telegram notifications:** Active (signals, trades, errors)
+- **Balance:** ~$94.71 USDC
+- **Initial Deposit:** $100.27
+- **Processes:** 2 (AI strategy + arb scanner)
+- **Telegram notifications:** Active (signals, trades, arbs, errors)
 
 ## Features
 
-- **AI Evaluator** — Claude 3.5 Haiku evaluates each market's true probability vs market price to find edge
-- **Market Scanner** — Fetches 198 markets (top volume + fast-resolving sorted by 24h volume)
-- **Fast-Resolving Priority** — Sports, crypto daily, esports markets evaluated first (resolve quickly = faster feedback)
+- **Two-Tier AI Evaluator** — Haiku screens 20 markets/cycle, Sonnet deep-evaluates flagged candidates for higher accuracy
+- **Arbitrage Scanner** — Separate process scanning every 30s for YES+NO price gaps (risk-free profit)
+- **Market Scanner** — Fetches 300+ markets (top volume + fast-resolving by 24h volume)
+- **Fast-Resolving Priority** — Sports, crypto daily, esports markets evaluated first
+- **Contrarian Bet Support** — Sonnet-confirmed signals can trade at prices as low as $0.03
 - **Live Trading** — Real money orders with EIP-712 signed authentication
 - **Paper Trading** — Practice with $1,000 virtual balance
-- **Telegram Alerts** — Notifications for signals, executed trades, and errors
+- **Telegram Alerts** — Notifications for signals, executed trades, arbs, and errors
 - **Risk Management** — Kelly criterion sizing with conservative limits
-- **Portfolio Tracking** — View balance, positions, and trade history
+- **Portfolio Tracking** — Open positions, resolved positions, P/L, auto-sell (TP/SL)
+- **AI Edge Re-Evaluation** — Re-evaluates open positions >24h old, sells if edge is gone
 
 ## Quick Start
 
@@ -71,54 +75,77 @@ cargo run -- market <market-slug>
 # Check account balance & positions
 cargo run -- account
 
-# Buy shares (dry run first!)
+# Buy/Sell shares
 cargo run -- buy <slug> yes 5 --dry-run
-cargo run -- buy <slug> yes 5  # real trade
+cargo run -- buy <slug> yes 5
+cargo run -- sell <slug> yes 10
 
-# Sell shares
-cargo run -- sell <slug> yes 10 --dry-run
-
-# Run automated strategy engine
+# Run automated strategy engine (AI evaluator)
 cargo run -- run --dry-run    # paper mode
 cargo run -- run              # live trading
+
+# Run arbitrage scanner
+cargo run -- arb --dry-run    # paper mode
+cargo run -- arb              # live scanning
+
+# View portfolio
+cargo run -- portfolio
 
 # Paper trading
 cargo run -- paper buy <slug> yes 10
 cargo run -- paper portfolio
-cargo run -- paper history
 ```
 
 ## Strategy Engine
 
-The bot uses an **AI-powered value betting strategy**:
+### AI Strategy (Two-Tier)
 
-1. **Scan** — Fetches 198 active markets (top volume + fast-resolving by 24h volume)
-2. **Prioritize** — Fast-resolving markets first (sports, crypto daily, esports)
-3. **AI Evaluate** — Claude 3.5 Haiku estimates true probability for each market
-4. **Signal** — Identifies markets where AI estimate diverges from market price by ≥ min edge
-5. **Risk Check** — Applies Kelly criterion sizing with conservative limits
+1. **Scan** — Fetches 300+ active markets
+2. **Tier 1 (Haiku)** — Fast screening of up to 20 markets per cycle
+3. **Tier 2 (Sonnet)** — Deep evaluation of Haiku-flagged candidates (more accurate)
+4. **Signal** — Identifies markets where AI estimate diverges from market price
+5. **Risk Check** — Kelly criterion sizing, min price filters (relaxed for Sonnet-confirmed)
 6. **Execute** — Places orders and sends Telegram notification
-7. **Notify** — Telegram alerts for signals, trades, and errors
 
-### Strategy Configuration
+### Arbitrage Scanner
+
+Separate process running every 30 seconds:
+1. Fetches all active markets from Gamma API
+2. Pre-filters by mid-price spread (YES + NO < $0.99)
+3. Checks actual CLOB order books for real ask prices
+4. Executes when YES + NO < $0.985 (1.5%+ guaranteed profit)
+5. Buys both sides simultaneously — risk-free
+
+### Configuration
 | Parameter | Value |
 |-----------|-------|
 | Max trade size | **$5** |
-| Max open positions | 10 |
+| Max open positions | **15** |
 | Max total exposure | **$50** |
-| Minimum edge | **10%** |
+| Minimum edge | **15%** |
 | Kelly fraction | **0.25** (quarter Kelly) |
-| Min market volume | $10,000 |
-| Min hours to close | 24h |
+| AI Tier 1 | Claude 3.5 Haiku (fast screen) |
+| AI Tier 2 | Claude Sonnet 4 (deep eval) |
+| Arb min spread | **1.5%** |
+| Arb scan interval | **30 seconds** |
+| Arb max size | **$10/side** |
 
 Configure in `strategy_config.json`.
 
 ## Architecture
 
 ```
-Scanner ─→ AI Evaluator (Claude 3.5 Haiku) ─→ Signal Generator ─→ Risk Check ─→ Execution
-   ↑                                                                               ↓
-   └──────────── Position Monitor ←── Trade Logger ←── Telegram Notifier ←─────────┘
+                    ┌─── AI Strategy Bot (PM2: polymarket-bot) ───┐
+                    │                                              │
+Scanner ──→ Tier 1 (Haiku) ──→ Tier 2 (Sonnet) ──→ Risk ──→ Execute
+                    │                                              │
+                    └──── Portfolio Monitor ←── Auto-Sell (TP/SL) ─┘
+
+                    ┌─── Arb Scanner (PM2: polymarket-arb) ───────┐
+                    │                                              │
+Gamma API ──→ Pre-filter ──→ Order Books ──→ Spread Check ──→ Execute Both Sides
+                    │                                              │
+                    └──── Telegram Alerts ─────────────────────────┘
 ```
 
 ### Auth Flow
@@ -126,9 +153,16 @@ Scanner ─→ AI Evaluator (Claude 3.5 Haiku) ─→ Signal Generator ─→ Ri
 - **EIP-712**: Order signing for the CTF Exchange smart contract
 - **Proxy Wallet**: Funds held in Polymarket proxy wallet, signed by EOA
 
+## PM2 Processes
+
+| Process | PM2 Name | Command | Interval |
+|---------|----------|---------|----------|
+| AI Strategy | `polymarket-bot` | `run` | 5 min |
+| Arb Scanner | `polymarket-arb` | `arb` | 30 sec |
+
 ## Tech Stack
 - **Rust** — Core bot logic
-- **Claude 3.5 Haiku** — AI market evaluation (via Anthropic API)
+- **Claude 3.5 Haiku + Sonnet 4** — Two-tier AI market evaluation
 - **alloy** — Ethereum primitives, EIP-712 signing
 - **reqwest** — HTTP client
 - **serde** — JSON serialization
@@ -144,11 +178,15 @@ Scanner ─→ AI Evaluator (Claude 3.5 Haiku) ─→ Signal Generator ─→ Ri
 | Auth (L2 HMAC + EIP-712) | ✅ Working |
 | Buy/Sell orders | ✅ Working |
 | Paper trading | ✅ Working |
-| AI Evaluator (Claude) | ✅ Working |
+| Two-Tier AI Evaluator | ✅ Live |
+| Arbitrage Scanner | ✅ Live |
 | Strategy engine | ✅ Live |
+| Portfolio tracker | ✅ Working |
+| Auto-sell (TP/SL) | ✅ Working |
+| AI Edge re-evaluation | ✅ Built (opt-in) |
 | Telegram notifications | ✅ Working |
 | Fast-resolving scanner | ✅ Working |
-| Live trading | ✅ **4 trades placed** |
+| Contrarian bet filter | ✅ Working |
 
 ## License
 Private — not for redistribution.
