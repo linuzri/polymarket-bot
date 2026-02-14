@@ -1,54 +1,5 @@
 {
-  "positions": {
-    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no": {
-      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
-      "token_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no",
-      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
-      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
-      "side": "NO",
-      "shares": 353.98230088495575,
-      "cost_basis": 20.0,
-      "avg_entry_price": 0.0565,
-      "current_price": 0.0415,
-      "opened_at": "2026-02-13T12:36:35.646531400Z"
-    },
-    "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes": {
-      "condition_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093",
-      "token_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes",
-      "market_slug": "russia-x-ukraine-ceasefire-by-june-30-2026",
-      "market_question": "Russia x Ukraine ceasefire by June 30, 2026?",
-      "side": "YES",
-      "shares": 63.32916145181477,
-      "cost_basis": 14.88235294117647,
-      "avg_entry_price": 0.235,
-      "current_price": 0.255,
-      "opened_at": "2026-02-13T10:18:12.251698400Z"
-    },
-    "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c_no": {
-      "condition_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c",
-      "token_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c_no",
-      "market_slug": "will-netflix-close-warner-bros-acquisition",
-      "market_question": "Will Netflix close Warner Bros acquisition?",
-      "side": "NO",
-      "shares": 38.095238095238095,
-      "cost_basis": 20.0,
-      "avg_entry_price": 0.525,
-      "current_price": 0.545,
-      "opened_at": "2026-02-13T10:32:51.154244400Z"
-    },
-    "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes": {
-      "condition_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266",
-      "token_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes",
-      "market_slug": "will-trump-nominate-jerome-powell-as-the-next-fed-chair",
-      "market_question": "Will Trump nominate Jerome Powell as the next Fed chair?",
-      "side": "YES",
-      "shares": 3411.7647058823572,
-      "cost_basis": 5.117647058823536,
-      "avg_entry_price": 0.0015,
-      "current_price": 0.0005,
-      "opened_at": "2026-02-13T11:44:58.413503100Z"
-    }
-  },
+  "positions": {},
   "resolved": [
     {
       "condition_id": "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b",
@@ -77,11 +28,76 @@
       "opened_at": "2026-02-13T10:32:49.658696400Z",
       "resolved_at": "2026-02-13T22:18:10.460104800Z",
       "outcome": "LOST"
+    },
+    {
+      "condition_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266",
+      "token_id": "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes",
+      "market_question": "Will Trump nominate Jerome Powell as the next Fed chair?",
+      "side": "YES",
+      "shares": 25588.2352941177,
+      "cost_basis": 38.38235294117652,
+      "avg_entry_price": 0.0014999999999999987,
+      "resolution_price": 0.0,
+      "realized_pnl": -38.38235294117652,
+      "opened_at": "2026-02-13T11:44:58.413503100Z",
+      "resolved_at": "2026-02-14T00:00:00Z",
+      "outcome": "WRITTEN-OFF"
+    },
+    {
+      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
+      "token_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no",
+      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
+      "side": "NO",
+      "shares": 88.49557522123894,
+      "cost_basis": 5.0,
+      "avg_entry_price": 0.0565,
+      "resolution_price": 0.0415,
+      "realized_pnl": -1.327433628318584,
+      "opened_at": "2026-02-13T12:36:35.646531400Z",
+      "resolved_at": "2026-02-14T00:05:00Z",
+      "outcome": "MANUAL-CLOSE"
+    },
+    {
+      "condition_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093",
+      "token_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes",
+      "market_question": "Russia x Ukraine ceasefire by June 30, 2026?",
+      "side": "YES",
+      "shares": 15.832290362953692,
+      "cost_basis": 3.7205882352941178,
+      "avg_entry_price": 0.235,
+      "resolution_price": 0.245,
+      "realized_pnl": 0.15832290362953708,
+      "opened_at": "2026-02-13T10:18:12.251698400Z",
+      "resolved_at": "2026-02-14T00:05:00Z",
+      "outcome": "MANUAL-CLOSE"
+    },
+    {
+      "condition_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c",
+      "token_id": "0x7ed08b305a3cca4f5b4e0c295c6b066e424a61358447b35d4f9bf1c2b56fe37c_no",
+      "market_question": "Will Netflix close Warner Bros acquisition?",
+      "side": "NO",
+      "shares": 9.523809523809524,
+      "cost_basis": 5.0,
+      "avg_entry_price": 0.525,
+      "resolution_price": 0.545,
+      "realized_pnl": 0.19047619047619063,
+      "opened_at": "2026-02-13T10:32:51.154244400Z",
+      "resolved_at": "2026-02-14T00:05:00Z",
+      "outcome": "MANUAL-CLOSE"
     }
   ],
   "alerted_resolutions": [
     "0x36f83a594b8d82801794bad2063f2861a99aebe28cf2cb55c3fd722d1a6d071b_no",
-    "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab_no"
+    "0xcb5eaf1785e02a868405c411bbe74b4fd74dd24544469d965a12d56975cb3bab_no",
+    "0x60acc46cda1f0619259acf3ef8c77bf734ff08cbed256ca3d1e9444138e21266_yes"
   ],
-  "last_updated": "2026-02-13T22:25:43.625452500Z"
+  "synced_trade_ids": [
+    "3737f43e-d65d-4999-9fb7-6b9987590eb1",
+    "7f561dd8-3a1a-4950-89b4-a70a65de8645",
+    "0d9e47ab-aeea-451b-a7e7-ffaeb94aa22e",
+    "43c98149-decd-49a8-9d6e-b6cf6e3859c0",
+    "6e8f7c4a-4b53-4f39-83e9-819c396f3dd5",
+    "d248a506-dc36-4c87-8a0e-dd7a77568e0f"
+  ],
+  "last_updated": "2026-02-14T00:06:47.766828500Z"
 }

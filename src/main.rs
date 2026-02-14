@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod btc5min;
 mod models;
 mod notifications;
 mod orders;
@@ -88,6 +89,27 @@ enum Commands {
     },
     /// Show real portfolio: open positions, resolved, P/L
     Portfolio,
+    /// BTC 5-minute Polymarket trading bot
+    Btc5min {
+        #[command(subcommand)]
+        action: Btc5minCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum Btc5minCommands {
+    /// Run the BTC 5-min trading loop
+    Run {
+        /// Force dry run
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Check the next available BTC 5-min market
+    Check,
+    /// Get a prediction from the ML ensemble
+    Predict,
+    /// Show trade results and stats
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -304,6 +326,9 @@ async fn main() -> Result<()> {
         Commands::Paper { action } => {
             handle_paper(action, &client).await?;
         }
+        Commands::Btc5min { action } => {
+            handle_btc5min(action, &client).await?;
+        }
         Commands::Portfolio => {
             let mut state = portfolio::PortfolioState::load()?;
             // Sync any trades from strategy log
@@ -322,6 +347,80 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn handle_btc5min(action: Btc5minCommands, client: &api::client::PolymarketClient) -> anyhow::Result<()> {
+    match action {
+        Btc5minCommands::Run { dry_run } => {
+            let mut config = btc5min::load_config()?;
+            if dry_run {
+                config.dry_run = true;
+            }
+            btc5min::run_loop(config).await?;
+        }
+        Btc5minCommands::Check => {
+            println!("Searching for BTC 5-min markets...");
+            match btc5min::find_btc5min_market(client).await? {
+                Some(market) => {
+                    println!("\nFound: {}", market.question);
+                    println!("  Slug: {}", market.slug);
+                    println!("  Condition ID: {}", market.condition_id);
+                    println!("  Up token:   {}", market.up_token_id);
+                    println!("  Down token: {}", market.down_token_id);
+                    println!("  Neg risk: {}", market.neg_risk);
+                }
+                None => {
+                    println!("No BTC 5-min market found. Markets may not be created yet for the next window.");
+                }
+            }
+        }
+        Btc5minCommands::Predict => {
+            println!("Getting BTC prediction from ML ensemble...");
+            match btc5min::get_prediction().await {
+                Ok(pred) => {
+                    if let Some(err) = &pred.error {
+                        println!("Prediction error: {}", err);
+                    } else {
+                        println!("\nSignal: {}", pred.signal.as_deref().unwrap_or("?"));
+                        println!("Confidence: {:.1}%", pred.confidence.unwrap_or(0.0) * 100.0);
+                        if let Some(models) = &pred.models {
+                            println!("Models: RF={} XGB={} LGB={}",
+                                models.get("rf").map(|s| s.as_str()).unwrap_or("?"),
+                                models.get("xgb").map(|s| s.as_str()).unwrap_or("?"),
+                                models.get("lgb").map(|s| s.as_str()).unwrap_or("?"));
+                        }
+                        if let Some(confs) = &pred.model_confidences {
+                            println!("Confidences: RF={:.1}% XGB={:.1}% LGB={:.1}%",
+                                confs.get("rf").unwrap_or(&0.0) * 100.0,
+                                confs.get("xgb").unwrap_or(&0.0) * 100.0,
+                                confs.get("lgb").unwrap_or(&0.0) * 100.0);
+                        }
+                    }
+                }
+                Err(e) => println!("Failed: {}", e),
+            }
+        }
+        Btc5minCommands::Stats => {
+            let tracker = btc5min::ResultsTracker::load();
+            println!("\nBTC 5-min Trading Stats");
+            println!("=======================");
+            println!("Total trades: {}", tracker.total_trades);
+            println!("Wins: {}", tracker.wins);
+            println!("Losses: {}", tracker.losses);
+            println!("Skipped: {}", tracker.skipped);
+            println!("Win rate: {:.1}%", tracker.win_rate() * 100.0);
+            println!("\nRecent trades:");
+            for trade in tracker.trades.iter().rev().take(10) {
+                let result = trade.resolved.as_deref().unwrap_or("pending");
+                let mode = if trade.dry_run { "DRY" } else { "LIVE" };
+                println!("  [{}] {} {} -> {} @ ${:.4} (conf: {:.0}%) [{}]",
+                    mode, trade.timestamp.chars().take(16).collect::<String>(),
+                    trade.signal, trade.side, trade.price,
+                    trade.confidence * 100.0, result);
+            }
+        }
+    }
     Ok(())
 }
 
