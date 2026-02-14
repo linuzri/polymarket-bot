@@ -81,6 +81,7 @@ pub struct ArbScanner {
     total_profit: f64,
     sniper_trades: u64,
     sniper_profit: f64,
+    sniper_committed: f64, // total USD committed to sniper orders (locks balance)
     sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
 }
 
@@ -99,6 +100,7 @@ impl ArbScanner {
             total_profit: 0.0,
             sniper_trades: 0,
             sniper_profit: 0.0,
+            sniper_committed: 0.0,
             sniped_markets: std::collections::HashSet::new(),
         }
     }
@@ -366,7 +368,16 @@ impl ArbScanner {
 
     /// Execute a sniper trade: buy the near-certain winning side
     async fn execute_sniper(&mut self, opp: &SniperOpportunity) -> Result<()> {
-        let shares = SNIPER_MAX_SIZE / opp.ask_price;
+        // Max exposure check: don't exceed $70 total committed (leave buffer from $92 portfolio)
+        const MAX_SNIPER_EXPOSURE: f64 = 70.0;
+        let remaining = MAX_SNIPER_EXPOSURE - self.sniper_committed;
+        if remaining < 5.0 {
+            info!("Sniper exposure limit reached (${:.0} committed) - skipping", self.sniper_committed);
+            return Ok(());
+        }
+        let trade_size = SNIPER_MAX_SIZE.min(remaining);
+
+        let shares = trade_size / opp.ask_price;
         let shares = (shares * 100.0).floor() / 100.0;
 
         if shares < 1.0 {
@@ -394,6 +405,7 @@ impl ArbScanner {
                 info!("Sniper order placed: {} {} @ ${:.4}", opp.side, shares, opp.ask_price);
                 self.sniper_trades += 1;
                 self.sniper_profit += expected_profit;
+                self.sniper_committed += cost;
 
                 // Track to avoid re-sniping
                 self.sniped_markets.insert(opp.condition_id.clone());
