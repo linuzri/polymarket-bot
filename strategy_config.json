@@ -16,7 +16,9 @@
     "model": "claude-3-5-haiku-20241022",
     "max_markets_per_cycle": 20,
     "min_confidence": 0.3,
-    "delay_between_calls_ms": 200
+    "delay_between_calls_ms": 200,
+    "tier2_model": "claude-sonnet-4-20250514",
+    "tier2_enabled": true
   },
   "auto_sell": {
     "enabled": true,

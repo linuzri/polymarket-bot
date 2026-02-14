@@ -114,7 +114,7 @@ impl StrategyEngine {
 
         let threshold = self.config.auto_sell.edge_confidence_threshold / 100.0;
 
-        match ai.evaluate_one(&candidate).await {
+        match ai.evaluate_one(&candidate, &ai.config.model).await {
             Ok(Some(signal)) => {
                 let ai_prob = signal.estimated_probability;
                 let ai_confidence = signal.confidence;

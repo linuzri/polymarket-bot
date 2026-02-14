@@ -26,9 +26,17 @@ struct AiEstimate {
 pub struct AiEvaluatorConfig {
     pub enabled: bool,
     pub model: String,
+    #[serde(default = "default_tier2_model")]
+    pub tier2_model: String,
+    #[serde(default)]
+    pub tier2_enabled: bool,
     pub max_markets_per_cycle: usize,
     pub min_confidence: f64,
     pub delay_between_calls_ms: u64,
+}
+
+fn default_tier2_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
 }
 
 impl Default for AiEvaluatorConfig {
@@ -36,6 +44,8 @@ impl Default for AiEvaluatorConfig {
         Self {
             enabled: true,
             model: "claude-3-5-haiku-20241022".to_string(),
+            tier2_model: "claude-sonnet-4-20250514".to_string(),
+            tier2_enabled: true,
             max_markets_per_cycle: 20,
             min_confidence: 0.3,
             delay_between_calls_ms: 200,
@@ -47,7 +57,7 @@ pub struct AiEvaluator {
     http: reqwest::Client,
     api_key: String,
     min_edge: f64,
-    config: AiEvaluatorConfig,
+    pub config: AiEvaluatorConfig,
 }
 
 impl AiEvaluator {
@@ -61,6 +71,7 @@ impl AiEvaluator {
     }
 
     /// Evaluate a batch of candidates, returning signals for those with edge
+    /// Two-tier system: Haiku screens all candidates, Sonnet deep-evaluates flagged ones
     pub async fn evaluate_batch(&self, candidates: &[CandidateMarket]) -> Vec<Signal> {
         let mut signals = Vec::new();
 
@@ -72,7 +83,6 @@ impl AiEvaluator {
             let hours_b = b.end_date.map(|d| (d - now).num_hours()).unwrap_or(9999);
             let fast_a = hours_a < 48;
             let fast_b = hours_b < 48;
-            // Fast-resolving markets first, then by volume within each group
             match (fast_a, fast_b) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
@@ -81,33 +91,66 @@ impl AiEvaluator {
         });
         let batch = &sorted[..sorted.len().min(self.config.max_markets_per_cycle)];
 
+        // Tier 1: Haiku screens all candidates
+        let mut tier1_signals = Vec::new();
         for (i, candidate) in batch.iter().enumerate() {
             if i > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(self.config.delay_between_calls_ms)).await;
             }
 
-            match self.evaluate_one(candidate).await {
+            match self.evaluate_one(candidate, &self.config.model).await {
                 Ok(Some(signal)) => {
-                    println!("  🧠 AI Evaluation: \"{}\"", truncate(&signal.market.question, 60));
+                    println!("  \u{1f9e0} Tier 1 (Haiku): \"{}\"", truncate(&signal.market.question, 55));
                     println!("     Market: YES ${:.2} | AI estimate: {:.0}% (conf: {:.0}%)",
                         signal.market.yes_price, signal.estimated_probability * 100.0, signal.confidence * 100.0);
-                    println!("     Edge: {:.0}% → BUY {}", signal.edge * 100.0, signal.side);
+                    println!("     Edge: {:.0}% -> BUY {}", signal.edge * 100.0, signal.side);
                     println!("     Reason: \"{}\"\n", signal.reason);
-                    signals.push(signal);
+                    tier1_signals.push(signal);
                 }
-                Ok(None) => {
-                    // No edge found
-                }
+                Ok(None) => {}
                 Err(e) => {
-                    warn!("AI evaluation failed for \"{}\": {}", truncate(&candidate.question, 40), e);
+                    warn!("Tier 1 evaluation failed for \"{}\": {}", truncate(&candidate.question, 40), e);
                 }
             }
+        }
+
+        // Tier 2: Sonnet deep-evaluates Haiku's picks
+        if self.config.tier2_enabled && !tier1_signals.is_empty() {
+            println!("\n  \u{1f50d} Tier 2 (Sonnet) deep evaluation on {} candidate(s)...\n", tier1_signals.len());
+            for signal in &tier1_signals {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                match self.evaluate_one(&signal.market, &self.config.tier2_model).await {
+                    Ok(Some(tier2_signal)) => {
+                        println!("  \u{2705} Tier 2 CONFIRMED: \"{}\"", truncate(&tier2_signal.market.question, 55));
+                        println!("     Haiku: {:.0}% prob, {:.0}% edge -> {} | Sonnet: {:.0}% prob, {:.0}% edge -> {}",
+                            signal.estimated_probability * 100.0, signal.edge * 100.0, signal.side,
+                            tier2_signal.estimated_probability * 100.0, tier2_signal.edge * 100.0, tier2_signal.side);
+                        println!("     Sonnet reason: \"{}\"\n", tier2_signal.reason);
+                        // Use Sonnet's evaluation (more accurate)
+                        signals.push(tier2_signal);
+                    }
+                    Ok(None) => {
+                        println!("  \u{274c} Tier 2 REJECTED: \"{}\"", truncate(&signal.market.question, 55));
+                        println!("     Sonnet found no edge (Haiku was too optimistic)\n");
+                    }
+                    Err(e) => {
+                        warn!("Tier 2 evaluation failed for \"{}\": {}", truncate(&signal.market.question, 40), e);
+                        // Fall back to Haiku's signal if Sonnet fails
+                        println!("  \u{26a0}\u{fe0f} Tier 2 failed, using Haiku signal as fallback\n");
+                        signals.push(signal.clone());
+                    }
+                }
+            }
+        } else if !tier1_signals.is_empty() {
+            // Tier 2 disabled, use Haiku signals directly
+            signals = tier1_signals;
         }
 
         signals
     }
 
-    pub async fn evaluate_one(&self, market: &CandidateMarket) -> Result<Option<Signal>> {
+    pub async fn evaluate_one(&self, market: &CandidateMarket, model: &str) -> Result<Option<Signal>> {
         let category = market.category.as_deref().unwrap_or("Unknown");
         let end_date_str = market.end_date
             .map(|d| {
@@ -150,7 +193,7 @@ Where:
         );
 
         let body = serde_json::json!({
-            "model": self.config.model,
+            "model": model,
             "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}]
         });
