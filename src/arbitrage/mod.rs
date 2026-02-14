@@ -14,6 +14,16 @@ const MAX_ARB_SIZE: f64 = 10.0;
 /// Scan interval in seconds
 const SCAN_INTERVAL_SECS: u64 = 30;
 
+// --- Sniper constants ---
+/// Minimum price to consider "near-resolved" (95%+ certainty)
+const SNIPER_MIN_PRICE: f64 = 0.95;
+/// Maximum price we'll pay (must leave room for profit)
+const SNIPER_MAX_PRICE: f64 = 0.99;
+/// Maximum USD per sniper trade
+const SNIPER_MAX_SIZE: f64 = 10.0;
+/// Minimum volume for sniper targets (avoid illiquid markets)
+const SNIPER_MIN_VOLUME: f64 = 50_000.0;
+
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
     pub question: String,
@@ -23,6 +33,19 @@ pub struct ArbOpportunity {
     pub yes_ask: f64,
     pub no_ask: f64,
     pub spread: f64, // 1.0 - (yes_ask + no_ask)
+    pub neg_risk: bool,
+    pub volume: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SniperOpportunity {
+    pub question: String,
+    pub slug: String,
+    pub token_id: String,
+    pub side: String, // "YES" or "NO"
+    pub ask_price: f64,
+    pub mid_price: f64,
+    pub expected_profit_pct: f64, // (1.0 - ask_price) / ask_price
     pub neg_risk: bool,
     pub volume: f64,
 }
@@ -54,6 +77,9 @@ pub struct ArbScanner {
     dry_run: bool,
     trades_executed: u64,
     total_profit: f64,
+    sniper_trades: u64,
+    sniper_profit: f64,
+    sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
 }
 
 impl ArbScanner {
@@ -69,6 +95,9 @@ impl ArbScanner {
             dry_run,
             trades_executed: 0,
             total_profit: 0.0,
+            sniper_trades: 0,
+            sniper_profit: 0.0,
+            sniped_markets: std::collections::HashSet::new(),
         }
     }
 
@@ -252,6 +281,134 @@ impl ArbScanner {
         Ok(())
     }
 
+    /// Check a market for sniper opportunity (near-resolved, buy winning side cheap)
+    async fn check_sniper(&self, client: &PolymarketClient, market: &GammaMarket) -> Option<SniperOpportunity> {
+        let question = market.question.as_deref()?;
+        let slug = market.slug.as_deref()?;
+        let cid = market.condition_id.as_deref()?;
+
+        // Skip already-sniped markets
+        if self.sniped_markets.contains(cid) {
+            return None;
+        }
+
+        // Parse prices
+        let prices: Vec<f64> = market.outcome_prices
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .map(|v| v.iter().filter_map(|p| p.parse::<f64>().ok()).collect())?;
+        if prices.len() < 2 {
+            return None;
+        }
+
+        // Parse volume
+        let volume = match &market.volume {
+            Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+            Some(serde_json::Value::String(s)) => s.parse::<f64>().unwrap_or(0.0),
+            _ => 0.0,
+        };
+        if volume < SNIPER_MIN_VOLUME {
+            return None;
+        }
+
+        // Parse token IDs
+        let tokens: Vec<String> = market.clob_token_ids
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())?;
+        if tokens.len() < 2 {
+            return None;
+        }
+
+        let yes_price = prices[0];
+        let no_price = prices[1];
+
+        // Determine which side is near-resolved
+        let (side, mid_price, token_idx) = if yes_price >= SNIPER_MIN_PRICE {
+            ("YES", yes_price, 0)
+        } else if no_price >= SNIPER_MIN_PRICE {
+            ("NO", no_price, 1)
+        } else {
+            return None;
+        };
+
+        // Check order book for actual ask price
+        let book = client.get_order_book(&tokens[token_idx]).await.ok()?;
+        let ask_price = book.asks.first().map(|a| a.price)?;
+
+        // Must be within our buy range
+        if ask_price < SNIPER_MIN_PRICE || ask_price > SNIPER_MAX_PRICE {
+            return None;
+        }
+
+        let expected_profit_pct = (1.0 - ask_price) / ask_price;
+
+        Some(SniperOpportunity {
+            question: question.to_string(),
+            slug: slug.to_string(),
+            token_id: tokens[token_idx].clone(),
+            side: side.to_string(),
+            ask_price,
+            mid_price,
+            expected_profit_pct,
+            neg_risk: market.neg_risk.unwrap_or(true),
+            volume,
+        })
+    }
+
+    /// Execute a sniper trade: buy the near-certain winning side
+    async fn execute_sniper(&mut self, opp: &SniperOpportunity) -> Result<()> {
+        let shares = SNIPER_MAX_SIZE / opp.ask_price;
+        let shares = (shares * 100.0).floor() / 100.0;
+
+        if shares < 1.0 {
+            warn!("Sniper shares too small: {:.2}", shares);
+            return Ok(());
+        }
+
+        let cost = shares * opp.ask_price;
+        let expected_payout = shares * 1.0;
+        let expected_profit = expected_payout - cost;
+
+        println!("  >> Executing sniper:");
+        println!("     BUY {:.2} {} @ ${:.4} = ${:.2}", shares, opp.side, opp.ask_price, cost);
+        println!("     Expected payout: ${:.2} | Expected profit: ${:.2} ({:.1}%)",
+            expected_payout, expected_profit, opp.expected_profit_pct * 100.0);
+
+        if self.dry_run {
+            println!("     (DRY RUN - not executing)\n");
+            return Ok(());
+        }
+
+        let client = PolymarketClient::new()?;
+        match orders::place_order(&client, &opp.token_id, orders::Side::Buy, opp.ask_price, shares, opp.neg_risk, false).await {
+            Ok(_) => {
+                info!("Sniper order placed: {} {} @ ${:.4}", opp.side, shares, opp.ask_price);
+                self.sniper_trades += 1;
+                self.sniper_profit += expected_profit;
+
+                // Track to avoid re-sniping
+                self.sniped_markets.insert(opp.slug.clone());
+
+                let msg = format!(
+                    "Sniper Trade #{}\n\n\"{}\"\n\nBUY {:.2} {} @ ${:.4} = ${:.2}\nExpected payout: ${:.2}\nExpected profit: ${:.2} ({:.1}%)\n\nNote: ~{:.0}% chance this resolves in our favor",
+                    self.sniper_trades,
+                    truncate(&opp.question, 60),
+                    shares, opp.side, opp.ask_price, cost,
+                    expected_payout, expected_profit, opp.expected_profit_pct * 100.0,
+                    opp.ask_price * 100.0
+                );
+                self.notifier.send(&msg).await;
+            }
+            Err(e) => {
+                error!("Sniper order failed: {}", e);
+                self.notifier.notify_error("Sniper order", &e.to_string()).await;
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Run one scan cycle
     async fn run_cycle(&mut self) -> Result<()> {
         let markets = self.fetch_markets().await?;
@@ -290,18 +447,54 @@ impl ArbScanner {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
-        if opportunities.is_empty() {
-            // Silent — no arb found is normal
-            return Ok(());
+        if !opportunities.is_empty() {
+            // Sort by spread (biggest profit first)
+            opportunities.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap());
+
+            // Execute best opportunities
+            for opp in &opportunities {
+                if let Err(e) = self.execute_arb(opp).await {
+                    error!("Arb execution failed: {}", e);
+                }
+            }
         }
 
-        // Sort by spread (biggest profit first)
-        opportunities.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap());
+        // --- Sniper: check for near-resolved markets ---
+        let sniper_candidates: Vec<&GammaMarket> = markets.iter()
+            .filter(|m| {
+                let prices: Vec<f64> = m.outcome_prices
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                    .map(|v| v.iter().filter_map(|p| p.parse::<f64>().ok()).collect())
+                    .unwrap_or_default();
+                prices.len() >= 2 && (prices[0] >= SNIPER_MIN_PRICE || prices[1] >= SNIPER_MIN_PRICE)
+            })
+            .collect();
 
-        // Execute best opportunities
-        for opp in &opportunities {
-            if let Err(e) = self.execute_arb(opp).await {
-                error!("Arb execution failed: {}", e);
+        if !sniper_candidates.is_empty() {
+            let mut sniper_opps = Vec::new();
+            for market in &sniper_candidates {
+                if let Some(opp) = self.check_sniper(&client, market).await {
+                    println!(
+                        "  >> SNIPER: \"{}\" | {} @ ${:.4} | Profit: {:.1}% | Vol: ${:.0}K",
+                        truncate(&opp.question, 50),
+                        opp.side, opp.ask_price,
+                        opp.expected_profit_pct * 100.0,
+                        opp.volume / 1000.0
+                    );
+                    sniper_opps.push(opp);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+
+            // Sort by profit % descending
+            sniper_opps.sort_by(|a, b| b.expected_profit_pct.partial_cmp(&a.expected_profit_pct).unwrap());
+
+            // Execute top sniper opportunities (max 2 per cycle to manage risk)
+            for opp in sniper_opps.iter().take(2) {
+                if let Err(e) = self.execute_sniper(opp).await {
+                    error!("Sniper execution failed: {}", e);
+                }
             }
         }
 
@@ -311,14 +504,16 @@ impl ArbScanner {
     /// Main loop
     pub async fn run(&mut self) -> Result<()> {
         let mode = if self.dry_run { "DRY RUN" } else { "LIVE" };
-        println!("\n== Polymarket Arbitrage Scanner - {} ==", mode);
-        println!("   Scan interval: {}s | Min spread: {:.1}% | Max size: ${:.0}/side",
-            SCAN_INTERVAL_SECS, MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE);
-        println!("   Looking for YES + NO < ${:.3}...\n", 1.0 - MIN_PROFIT_PCT);
+        println!("\n== Polymarket Arb + Sniper Scanner - {} ==", mode);
+        println!("   Scan interval: {}s", SCAN_INTERVAL_SECS);
+        println!("   Arb: min spread {:.1}% | max ${:.0}/side", MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE);
+        println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K\n",
+            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0);
 
         let startup_msg = format!(
-            "Arb Scanner Started ({})\nInterval: {}s | Min spread: {:.1}% | Max: ${:.0}/side",
-            mode, SCAN_INTERVAL_SECS, MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE
+            "Arb + Sniper Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, ${:.0}K min vol",
+            mode, SCAN_INTERVAL_SECS, MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE,
+            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0
         );
         self.notifier.send(&startup_msg).await;
 
