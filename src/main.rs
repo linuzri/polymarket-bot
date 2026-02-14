@@ -1,4 +1,5 @@
 mod api;
+mod arbitrage;
 mod auth;
 mod btc5min;
 mod models;
@@ -93,6 +94,12 @@ enum Commands {
     Btc5min {
         #[command(subcommand)]
         action: Btc5minCommands,
+    },
+    /// Run the arbitrage scanner (buys YES+NO when sum < $1)
+    Arb {
+        /// Force dry run (no real trades)
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -328,6 +335,10 @@ async fn main() -> Result<()> {
         }
         Commands::Btc5min { action } => {
             handle_btc5min(action, &client).await?;
+        }
+        Commands::Arb { dry_run } => {
+            let mut scanner = arbitrage::ArbScanner::new(dry_run);
+            scanner.run().await?;
         }
         Commands::Portfolio => {
             let mut state = portfolio::PortfolioState::load()?;

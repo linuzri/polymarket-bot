@@ -125,7 +125,27 @@
       "dry_run": false,
       "pnl": null,
       "closed": false
+    },
+    {
+      "id": "71d187ab-393d-4a43-9daa-ac37f0454849",
+      "timestamp": "2026-02-14T03:15:51.839882100Z",
+      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
+      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
+      "side": "NO",
+      "action": "BUY",
+      "price": 0.0425,
+      "size_usd": 5.0,
+      "shares": 117.6470588235294,
+      "edge": 0.2075,
+      "confidence": 0.35,
+      "reason": "While Kevin Warsh has been prominently mentioned as a Fed chair candidate and has Trump administration connections, the 96% market price seems overconfident given Trump's unpredictable nomination patterns and other potential candidates like Scott Bessent or Jay Clayton who may be under consideration.",
+      "dry_run": false,
+      "pnl": null,
+      "closed": false
     }
   ],
-  "open_positions": {}
+  "open_positions": {
+    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc": 5.0
+  }
 }

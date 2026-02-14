@@ -19,6 +19,16 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "500M"
+    },
+    {
+      name: "polymarket-arb",
+      cwd: "C:\\Users\\Nazri Hussain\\projects\\polymarket-bot",
+      script: "target\\release\\polymarket-bot.exe",
+      args: "arb",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "500M"
     }
   ]
 }
