@@ -25,7 +25,7 @@ def get_mt5_candles(count=300):
         return None, "MetaTrader5 module not installed"
 
     # Load MT5 auth
-    auth_path = os.path.join(MT5_PROJECT, "mt5_auth.json")
+    auth_path = os.path.join(BTCUSD_DIR, "mt5_auth.json")
     if not os.path.exists(auth_path):
         return None, "mt5_auth.json not found"
 

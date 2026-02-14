@@ -384,6 +384,124 @@ pub async fn place_btc5min_trade(
     }
 }
 
+/// Check resolutions for unresolved trades
+pub async fn check_resolutions(
+    tracker: &mut ResultsTracker,
+    notifier: &TelegramNotifier,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    let mut any_updated = false;
+
+    for trade in tracker.trades.iter_mut() {
+        if trade.resolved.is_some() {
+            continue;
+        }
+
+        // Parse timestamp from slug (e.g. btc-updown-5m-1771028700)
+        let start_ts: i64 = trade.market_slug
+            .strip_prefix("btc-updown-5m-")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // Wait at least 6 minutes after market start for resolution
+        if start_ts == 0 || now < start_ts + 360 {
+            continue;
+        }
+
+        // Fetch market from Gamma API to check resolution
+        let url = format!(
+            "https://gamma-api.polymarket.com/events?slug={}",
+            trade.market_slug
+        );
+
+        let http = reqwest::Client::builder()
+            .user_agent("polymarket-bot/0.1.0")
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
+
+        let resp = match http.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Failed to check resolution for {}: {}", trade.market_slug, e);
+                continue;
+            }
+        };
+
+        let body: serde_json::Value = match resp.json().await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let events = match body.as_array() {
+            Some(arr) if !arr.is_empty() => arr,
+            _ => continue,
+        };
+
+        let event = &events[0];
+        let markets = event.get("markets").and_then(|m| m.as_array());
+        let markets = match markets {
+            Some(m) if !m.is_empty() => m,
+            _ => continue,
+        };
+
+        // Check if market is resolved by looking at outcomePrices
+        // Polymarket sets outcomePrices to ["1","0"] or ["0","1"] when resolved
+        // (the "resolved" field may be null even when settled)
+        let mut winner: Option<String> = None;
+
+        let m = &markets[0];
+        if let Some(outcomes_str) = m.get("outcomePrices").and_then(|v| v.as_str()) {
+            if let Ok(prices) = serde_json::from_str::<Vec<String>>(outcomes_str) {
+                if prices.len() >= 2 {
+                    let p0: f64 = prices[0].parse().unwrap_or(0.5);
+                    let p1: f64 = prices[1].parse().unwrap_or(0.5);
+                    // Only count as resolved if one outcome is clearly 1.0 and other 0.0
+                    if (p0 - 1.0).abs() < 0.01 && p1.abs() < 0.01 {
+                        // First outcome (Up/Yes) won
+                        winner = Some("Up".to_string());
+                    } else if p0.abs() < 0.01 && (p1 - 1.0).abs() < 0.01 {
+                        // Second outcome (Down/No) won
+                        winner = Some("Down".to_string());
+                    }
+                    // If prices are still mid-range (e.g. 0.55/0.45), market is not yet resolved
+                }
+            }
+        }
+
+        if let Some(ref w) = winner {
+            let won = trade.side == *w;
+            trade.resolved = Some(if won { "win".to_string() } else { "loss".to_string() });
+            if won {
+                tracker.wins += 1;
+            } else {
+                tracker.losses += 1;
+            }
+            any_updated = true;
+
+            let emoji = if won { "✅" } else { "❌" };
+            let total = tracker.wins + tracker.losses;
+            let wr = if total > 0 { tracker.wins as f64 / total as f64 * 100.0 } else { 0.0 };
+            info!("{} {} | Predicted: {} | Actual: {} | Record: {}-{} ({:.0}% WR)",
+                  emoji, trade.market_slug, trade.side, w, tracker.wins, tracker.losses, wr);
+
+            notifier.send(&format!(
+                "{} <b>BTC 5min Result</b>\n\
+                 Market: {}\n\
+                 Predicted: {} | Actual: {}\n\
+                 Record: {}-{}-{} (WR: {:.0}%)",
+                emoji, trade.market_slug, trade.side, w,
+                tracker.wins, tracker.losses, tracker.skipped, wr
+            )).await;
+        }
+    }
+
+    if any_updated {
+        tracker.save()?;
+    }
+
+    Ok(())
+}
+
 /// Run one cycle: find market, predict, trade
 pub async fn run_cycle(
     client: &PolymarketClient,
@@ -519,6 +637,11 @@ pub async fn run_loop(config: Btc5minConfig) -> Result<()> {
     )).await;
 
     loop {
+        // Check resolutions for past trades first
+        if let Err(e) = check_resolutions(&mut tracker, &notifier).await {
+            warn!("Resolution check error: {}", e);
+        }
+
         match run_cycle(&client, &config, &notifier, &mut tracker).await {
             Ok(()) => {}
             Err(e) => {
