@@ -26,7 +26,7 @@ const SNIPER_MIN_VOLUME: f64 = 50_000.0; // lowered from 100K — more fast-reso
 /// Max total USD committed to sniper orders (leave buffer from portfolio)
 const MAX_SNIPER_EXPOSURE: f64 = 70.0;
 /// Maximum days until resolution for sniper targets (skip 2028 presidential etc.)
-const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 90.0;
+const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 365.0;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -295,6 +295,62 @@ impl ArbScanner {
         Ok(())
     }
 
+    /// Estimate how many days until a market resolves
+    fn estimate_resolution_days(end_date: Option<&str>, question: &str) -> f64 {
+        // Try end_date_iso first
+        if let Some(end) = end_date {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(end) {
+                let days = dt.signed_duration_since(chrono::Utc::now()).num_hours() as f64 / 24.0;
+                if days > 0.0 { return days; }
+                return 0.1;
+            }
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(end, "%Y-%m-%dT%H:%M:%S%.fZ") {
+                let now = chrono::Utc::now().naive_utc();
+                let days = dt.signed_duration_since(now).num_hours() as f64 / 24.0;
+                if days > 0.0 { return days; }
+                return 0.1;
+            }
+        }
+
+        // Heuristic from question text
+        let q = question.to_lowercase();
+
+        // Very fast: today/tomorrow keywords
+        if q.contains("today") || q.contains("tonight") { return 0.5; }
+
+        // Check for specific month mentions relative to now (Feb 2026)
+        let now: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        let current_month = now.format("%B").to_string().to_lowercase(); // "february"
+        let current_year = now.format("%Y").to_string(); // "2026"
+
+        // "in February" or "February 2026" = this month (0-28 days)
+        if q.contains(&format!("{} {}", &current_month, &current_year)) || q.contains(&format!("in {}", &current_month)) {
+            return 14.0;
+        }
+        if q.contains("february") && q.contains("2026") { return 14.0; }
+        if q.contains("by february") || q.contains("before february") { return 14.0; }
+
+        // Specific near-term dates: "by March", "Q1 2026"
+        if q.contains("march 2026") || q.contains("by march") { return 30.0; }
+        if q.contains("q1 2026") { return 45.0; }
+        if q.contains("april 2026") || q.contains("by april") { return 60.0; }
+
+        // Sports seasons (resolve within months)
+        if q.contains("2025-26") || q.contains("2025\u{2013}26") { return 120.0; }
+
+        // 2026 without specific month = within the year
+        if q.contains("2026") && !q.contains("2027") && !q.contains("2028") { return 180.0; }
+
+        // 2027 = ~1-2 years
+        if q.contains("2027") { return 500.0; }
+
+        // 2028 presidential = very far out
+        if q.contains("2028") { return 900.0; }
+
+        // Default: unknown, assume moderately far
+        180.0
+    }
+
     /// Check a market for sniper opportunity (near-resolved, buy winning side cheap)
     async fn check_sniper(&self, client: &PolymarketClient, market: &GammaMarket) -> Option<SniperOpportunity> {
         let question = market.question.as_deref()?;
@@ -306,28 +362,10 @@ impl ArbScanner {
             return None;
         }
 
-        // Calculate days to resolution
-        let days_to_resolve = match &market.end_date_iso {
-            Some(end_date) => {
-                // Parse ISO date string
-                if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_date) {
-                    let now = chrono::Utc::now();
-                    let diff = end.signed_duration_since(now);
-                    let days = diff.num_hours() as f64 / 24.0;
-                    if days < 0.0 { 0.1 } else { days } // already past = resolves very soon
-                } else if let Ok(end) = chrono::NaiveDateTime::parse_from_str(end_date, "%Y-%m-%dT%H:%M:%S%.fZ") {
-                    let now = chrono::Utc::now().naive_utc();
-                    let diff = end.signed_duration_since(now);
-                    let days = diff.num_hours() as f64 / 24.0;
-                    if days < 0.0 { 0.1 } else { days }
-                } else {
-                    365.0 // unknown = assume far out
-                }
-            }
-            None => 365.0, // no end date = assume far out
-        };
+        // Estimate days to resolution from end_date or question content
+        let days_to_resolve = Self::estimate_resolution_days(market.end_date_iso.as_deref(), question);
 
-        // Skip markets that won't resolve for a long time
+        // Skip markets too far out (2028 presidential etc.)
         if days_to_resolve > SNIPER_MAX_DAYS_TO_RESOLVE {
             return None;
         }
