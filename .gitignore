@@ -4,3 +4,7 @@
 *.key
 
 paper_account.json
+check_*.py
+scripts/check_*.py
+scripts/find_*.py
+scripts/test_*.py
