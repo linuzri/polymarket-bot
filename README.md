@@ -1,196 +1,130 @@
 # 🎯 Polymarket Trading Bot
 
-Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses a **two-tier AI evaluator** (Claude 3.5 Haiku + Claude Sonnet 4) and an **arbitrage scanner** to find profitable trades.
+Automated prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Focused on **risk-free sniper trading** — buying near-certain outcomes at 95-99.9¢ and collecting $1.00 on resolution.
 
 ## 🔴 Live Trading Status
 
-- **Balance:** ~$94.71 USDC
+- **Balance:** ~$92.40 USDC
 - **Initial Deposit:** $100.27
-- **Processes:** 2 (AI strategy + arb scanner)
-- **Telegram notifications:** Active (signals, trades, arbs, errors)
+- **Strategy:** Risk-free sniper + arbitrage scanner
+- **Process:** 1 (arb scanner with integrated sniper)
+- **Telegram notifications:** Active (trades, hourly portfolio summary, errors)
+
+## Architecture
+
+```
+polymarket-arb (PM2 id:13)
+├── Arbitrage Scanner — YES+NO < $0.985 spread detection
+├── Resolved-Market Sniper — buy 95-99.9¢ near-certain outcomes
+│   ├── Tick-size-aware pricing (supports 0.001 and 0.0001 tick markets)
+│   ├── Exposure limit ($70 max committed)
+│   ├── Duplicate tracking (by condition_id)
+│   └── Balance error suppression
+└── Hourly Portfolio Summary → Telegram
+```
 
 ## Features
 
-- **Two-Tier AI Evaluator** — Haiku screens 20 markets/cycle, Sonnet deep-evaluates flagged candidates for higher accuracy
-- **Arbitrage Scanner** — Separate process scanning every 30s for YES+NO price gaps (risk-free profit)
-- **Market Scanner** — Fetches 300+ markets (top volume + fast-resolving by 24h volume)
-- **Fast-Resolving Priority** — Sports, crypto daily, esports markets evaluated first
-- **Contrarian Bet Support** — Sonnet-confirmed signals can trade at prices as low as $0.03
-- **Live Trading** — Real money orders with EIP-712 signed authentication
-- **Paper Trading** — Practice with $1,000 virtual balance
-- **Telegram Alerts** — Notifications for signals, executed trades, arbs, and errors
-- **Risk Management** — Kelly criterion sizing with conservative limits
-- **Portfolio Tracking** — Open positions, resolved positions, P/L, auto-sell (TP/SL)
-- **AI Edge Re-Evaluation** — Re-evaluates open positions >24h old, sells if edge is gone
+### Active (Risk-Free Focus)
+- **Resolved-Market Sniper** — Buys obvious outcomes (e.g., "Will Jesus return before 2027?" NO @ $0.999)
+- **Tick-Size-Aware Pricing** — Fetches each market's `minimum_tick_size` from CLOB API, enabling 3-4 decimal price precision ($0.999, $0.9999)
+- **Arbitrage Scanner** — Scans for YES+NO price gaps where both sides sum < $0.985
+- **Exposure Management** — Tracks committed capital, stops at $70 limit
+- **Hourly Portfolio Summary** — Automated Telegram updates with positions, P/L, and stats
+- **Telegram Alerts** — Real-time notifications for every trade placed
+
+### Available (Paused)
+- **Two-Tier AI Evaluator** — Haiku screens → Sonnet deep-evaluates (paused to focus on risk-free)
+- **Contrarian Bet Support** — Sonnet-confirmed signals at $0.03+ prices
+- **Portfolio Tracking** — Open/resolved positions, auto-sell (TP/SL), edge re-evaluation
+- **Paper Trading** — Practice with virtual balance
+
+## Sniper Strategy
+
+The Anjun-inspired strategy:
+1. Scan 300+ active markets every 30 seconds
+2. Find outcomes priced 95-99.9% certain (near-resolved)
+3. Buy the winning side at market ask price
+4. Wait for resolution → collect $1.00 per share
+5. Profit = $1.00 - buy price (0.1% to 5% per trade)
+
+**Target markets:** 2028 presidential candidates, Fed nominees, expired event deadlines, sports longshots, absurd outcomes.
+
+**Tick size matters:** Political markets use 0.001 tick (3 decimal prices = $0.999 possible). Sports use 0.01 tick (max $0.99).
+
+### Risk Profile
+- **Near risk-free** — buying outcomes with 95-99.9% implied probability
+- **Black swan risk** — tiny chance the "impossible" happens
+- **Capital lockup** — some markets don't resolve for months/years
+- **Best at scale** — Anjun made $1M with $200K positions; at $92, returns are pennies
 
 ## Quick Start
 
 ### Prerequisites
 - [Rust](https://rustup.rs/) (1.75+)
 - Polymarket account with funds deposited
-- API credentials (derived via `py_clob_client`)
-- Anthropic API key (for Claude evaluator)
 
 ### Setup
-
-1. Clone the repo:
 ```bash
-git clone https://github.com/linuzri/polymarket-bot.git
-cd polymarket-bot
+cp .env.example .env
+# Edit .env with your wallet keys and API credentials
+cargo build --release
 ```
 
-2. Create `.env` file:
-```env
-POLY_WALLET_ADDRESS=<your-eoa-wallet-address>
-POLY_PROXY_WALLET=<your-proxy-wallet-address>
-POLY_PRIVATE_KEY=<your-private-key>
-POLY_API_KEY=<clob-api-key>
-POLY_API_SECRET=<clob-api-secret>
-POLY_PASSPHRASE=<clob-passphrase>
-ANTHROPIC_API_KEY=<claude-api-key>
-TELEGRAM_BOT_TOKEN=<telegram-bot-token>
-TELEGRAM_CHAT_ID=<your-chat-id>
-```
-
-3. Derive API credentials (one-time):
+### Run
 ```bash
-pip install py-clob-client
-python -c "
-from py_clob_client.client import ClobClient
-c = ClobClient('https://clob.polymarket.com', key='YOUR_PRIVATE_KEY', chain_id=137)
-creds = c.create_or_derive_api_creds()
-print(creds)
-"
+# Arb + Sniper scanner (primary)
+./target/release/polymarket-bot arb
+
+# AI strategy bot (paused, available if needed)
+./target/release/polymarket-bot run
 ```
 
-### Usage
-
+### PM2 (Production)
 ```bash
-# Browse markets
-cargo run -- markets -q "trump" -l 10
-
-# View market details
-cargo run -- market <market-slug>
-
-# Check account balance & positions
-cargo run -- account
-
-# Buy/Sell shares
-cargo run -- buy <slug> yes 5 --dry-run
-cargo run -- buy <slug> yes 5
-cargo run -- sell <slug> yes 10
-
-# Run automated strategy engine (AI evaluator)
-cargo run -- run --dry-run    # paper mode
-cargo run -- run              # live trading
-
-# Run arbitrage scanner
-cargo run -- arb --dry-run    # paper mode
-cargo run -- arb              # live scanning
-
-# View portfolio
-cargo run -- portfolio
-
-# Paper trading
-cargo run -- paper buy <slug> yes 10
-cargo run -- paper portfolio
+pm2 start ecosystem.config.js --only polymarket-arb
 ```
 
-## Strategy Engine
+## Configuration
 
-### AI Strategy (Two-Tier)
+### Sniper Constants (src/arbitrage/mod.rs)
+| Constant | Value | Description |
+|----------|-------|-------------|
+| SNIPER_MIN_PRICE | 0.95 | Minimum price (95% certainty) |
+| SNIPER_MAX_PRICE | 0.999 | Maximum price (99.9% for 0.001 tick) |
+| SNIPER_MAX_SIZE | $25 | Max USD per trade |
+| SNIPER_MIN_VOLUME | $100K | Min market volume |
+| MAX_SNIPER_EXPOSURE | $70 | Total committed limit |
 
-1. **Scan** — Fetches 300+ active markets
-2. **Tier 1 (Haiku)** — Fast screening of up to 20 markets per cycle
-3. **Tier 2 (Sonnet)** — Deep evaluation of Haiku-flagged candidates (more accurate)
-4. **Signal** — Identifies markets where AI estimate diverges from market price
-5. **Risk Check** — Kelly criterion sizing, min price filters (relaxed for Sonnet-confirmed)
-6. **Execute** — Places orders and sends Telegram notification
+### Strategy Config (strategy_config.json)
+AI evaluator settings (when enabled): scan interval, max trade size, Kelly fraction, confidence thresholds.
 
-### Arbitrage Scanner
+## Key Files
+| File | Purpose |
+|------|---------|
+| `src/arbitrage/mod.rs` | Arb scanner + sniper logic |
+| `src/orders/mod.rs` | Order building, tick-size-aware signing |
+| `src/api/client.rs` | CLOB API client (orders, books, tick sizes) |
+| `src/notifications/mod.rs` | Telegram notifications |
+| `src/portfolio/mod.rs` | Position tracking |
+| `src/strategy/` | AI evaluator (paused) |
+| `ecosystem.config.js` | PM2 process config |
+| `portfolio_state.json` | Persisted portfolio state |
+| `strategy_config.json` | AI strategy config |
 
-Separate process running every 30 seconds:
-1. Fetches all active markets from Gamma API
-2. Pre-filters by mid-price spread (YES + NO < $0.99)
-3. Checks actual CLOB order books for real ask prices
-4. Executes when YES + NO < $0.985 (1.5%+ guaranteed profit)
-5. Buys both sides simultaneously — risk-free
+## Wallet Setup
+- **EOA Wallet:** Signs transactions (POLY_WALLET_ADDRESS)
+- **Proxy Wallet:** Holds funds, is maker (POLY_PROXY_WALLET)
+- **Auth:** EIP-712 signatures, signature_type=1 for proxy wallets
+- **CLOB API keys:** Deterministically derived from private key (cannot be rotated without new wallet)
 
-### Configuration
-| Parameter | Value |
-|-----------|-------|
-| Max trade size | **$5** |
-| Max open positions | **15** |
-| Max total exposure | **$50** |
-| Minimum edge | **15%** |
-| Kelly fraction | **0.25** (quarter Kelly) |
-| AI Tier 1 | Claude 3.5 Haiku (fast screen) |
-| AI Tier 2 | Claude Sonnet 4 (deep eval) |
-| Arb min spread | **1.5%** |
-| Arb scan interval | **30 seconds** |
-| Arb max size | **$10/side** |
-
-Configure in `strategy_config.json`.
-
-## Architecture
-
-```
-                    ┌─── AI Strategy Bot (PM2: polymarket-bot) ───┐
-                    │                                              │
-Scanner ──→ Tier 1 (Haiku) ──→ Tier 2 (Sonnet) ──→ Risk ──→ Execute
-                    │                                              │
-                    └──── Portfolio Monitor ←── Auto-Sell (TP/SL) ─┘
-
-                    ┌─── Arb Scanner (PM2: polymarket-arb) ───────┐
-                    │                                              │
-Gamma API ──→ Pre-filter ──→ Order Books ──→ Spread Check ──→ Execute Both Sides
-                    │                                              │
-                    └──── Telegram Alerts ─────────────────────────┘
-```
-
-### Auth Flow
-- **L2 HMAC**: API request authentication (balance, orders, trades)
-- **EIP-712**: Order signing for the CTF Exchange smart contract
-- **Proxy Wallet**: Funds held in Polymarket proxy wallet, signed by EOA
-
-## PM2 Processes
-
-| Process | PM2 Name | Command | Interval |
-|---------|----------|---------|----------|
-| AI Strategy | `polymarket-bot` | `run` | 5 min |
-| Arb Scanner | `polymarket-arb` | `arb` | 30 sec |
-
-## Tech Stack
-- **Rust** — Core bot logic
-- **Claude 3.5 Haiku + Sonnet 4** — Two-tier AI market evaluation
-- **alloy** — Ethereum primitives, EIP-712 signing
-- **reqwest** — HTTP client
-- **serde** — JSON serialization
-- **clap** — CLI argument parsing
-- **tokio** — Async runtime
-
-## Project Status
-
-| Component | Status |
-|-----------|--------|
-| Market browser | ✅ Working |
-| Order book viewer | ✅ Working |
-| Auth (L2 HMAC + EIP-712) | ✅ Working |
-| Buy/Sell orders | ✅ Working |
-| Paper trading | ✅ Working |
-| Two-Tier AI Evaluator | ✅ Live |
-| Arbitrage Scanner | ✅ Live |
-| Strategy engine | ✅ Live |
-| Portfolio tracker | ✅ Working |
-| Auto-sell (TP/SL) | ✅ Working |
-| AI Edge re-evaluation | ✅ Built (opt-in) |
-| Telegram notifications | ✅ Working |
-| Fast-resolving scanner | ✅ Working |
-| Contrarian bet filter | ✅ Working |
+## Commit History (Recent)
+- `94df988` — Hourly portfolio summary to Telegram
+- `5b1dcc5` — Tick-size-aware pricing (unlock 99.9¢)
+- `16baebd` — Resolved-market sniper
+- `6a0dfe4` — Arbitrage scanner
+- `fa2cb47` — Two-tier AI evaluator + contrarian filter
+- `55dfcbd` — Security: scrub git history of leaked keys
 
 ## License
-Private — not for redistribution.
-
-## Links
-- [Polymarket](https://polymarket.com)
-- [Polymarket CLOB Docs](https://docs.polymarket.com)
+Private repository.

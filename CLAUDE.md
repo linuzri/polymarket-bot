@@ -1,116 +1,97 @@
 # CLAUDE.md - Polymarket Bot
 
 ## Project Overview
-Automated Polymarket prediction market trading bot built in Rust. Uses Claude 3.5 Haiku as AI evaluator to find edge vs market prices. **Live trading enabled** with real money.
+Automated Polymarket prediction market trading bot built in Rust. **Pivoted to risk-free sniper strategy** — buying near-certain outcomes at 95-99.9¢ and collecting $1.00 on resolution.
 
-## Current Status (Feb 13, 2026)
-- **Balance:** ~$99 USDC (deposited $100 via Bitcoin Feb 12)
-- **Trades:** 4 confirmed live trades placed
-- **Telegram:** Notifications active for signals, trades, errors
-- **Scanner:** 198 markets (top volume + fast-resolving by 24h volume)
-- **Strategy:** $5 max trade, $50 max exposure, 10% min edge, 25% Kelly fraction
+## Current Status (Feb 14, 2026)
+- **Balance:** ~$92.40 USDC (deposited $100.27)
+- **Strategy:** Risk-free sniper + arbitrage scanner
+- **Process:** `polymarket-arb` (PM2 id:13) — single process doing both arb + sniper
+- **AI strategy bot:** PAUSED (PM2 id:7, stopped)
+- **Telegram:** Trade alerts + hourly portfolio summary
 
 ## Architecture
 ```
 polymarket-bot/
 ├── src/
 │   ├── api/
-│   │   ├── client.rs      # API client (Gamma + CLOB)
+│   │   ├── client.rs      # API client (Gamma + CLOB + tick size fetching)
 │   │   └── endpoints.rs   # URL constants
+│   ├── arbitrage/
+│   │   └── mod.rs          # Arb scanner + resolved-market sniper (MAIN BOT)
 │   ├── auth/
-│   │   └── mod.rs          # L2 HMAC auth + EIP-712 signing support
+│   │   └── mod.rs          # L2 HMAC auth + EIP-712 signing
 │   ├── models/
 │   │   └── market.rs       # Market, OrderBook, GammaMarket structs
 │   ├── orders/
-│   │   └── mod.rs          # EIP-712 order signing + placement
-│   ├── paper/
-│   │   └── mod.rs          # Paper trading engine ($1000 virtual)
-│   ├── strategy/
-│   │   ├── mod.rs          # Strategy module
-│   │   ├── scanner.rs      # Market scanner (198 markets, fast-resolving priority)
-│   │   ├── evaluator.rs    # AI evaluator (Claude 3.5 Haiku)
-│   │   ├── risk.rs         # Risk manager (Kelly criterion)
-│   │   ├── engine.rs       # Main strategy loop
-│   │   ├── logger.rs       # Trade logging
-│   │   └── telegram.rs     # Telegram notifications
-│   ├── signals/
-│   │   └── mod.rs          # Signal types
-│   └── main.rs             # CLI entry point
-├── strategy_config.json    # Strategy configuration
-├── paper_account.json      # Paper trading state
+│   │   └── mod.rs          # Tick-size-aware order signing (1-4 decimal precision)
+│   ├── notifications/
+│   │   └── mod.rs          # Telegram notifications
+│   ├── portfolio/
+│   │   └── mod.rs          # Position tracking, auto-sell, edge re-eval
+│   ├── strategy/           # AI evaluator (PAUSED)
+│   │   ├── scanner.rs      # Market scanner
+│   │   ├── evaluator.rs    # Signal struct + AI evaluation
+│   │   ├── ai_evaluator.rs # Two-tier Claude evaluator
+│   │   ├── risk.rs         # Kelly criterion sizing
+│   │   ├── engine.rs       # Strategy loop
+│   │   └── config.rs       # Strategy config
+│   ├── btc5min/
+│   │   └── mod.rs          # BTC 5-min markets (DISABLED - 17% WR)
+│   └── main.rs             # CLI: run, arb, portfolio, paper
+├── ecosystem.config.js     # PM2: polymarket-arb (active), polymarket-bot (stopped)
+├── strategy_config.json    # AI strategy config (when enabled)
+├── portfolio_state.json    # Persisted portfolio state
 ├── .env                    # Credentials (NEVER commit)
-├── Cargo.toml
-└── README.md
+└── scripts/                # Helper scripts (gitignored)
 ```
 
 ## Key Concepts
 
-### AI Evaluator
-- Claude 3.5 Haiku evaluates each market's true probability
-- Compares AI estimate vs market price to find edge
-- Fast-resolving markets prioritized (sports, crypto daily, esports)
-- Minimum 10% edge required to generate signal
+### Sniper Strategy (Active)
+- Scans 300+ markets every 30s via Gamma API
+- Finds outcomes priced 95-99.9% certain
+- Fetches `minimum_tick_size` from CLOB API per market
+- Places buy orders at ask price with correct decimal precision
+- Tracks sniped markets by `condition_id` to avoid duplicates
+- Exposure limit: $70 max committed, $25 max per trade
+- Sends hourly portfolio summary to Telegram
 
-### Authentication
-- **L1 Auth**: EIP-712 signed message (for deriving API keys)
-- **L2 Auth**: HMAC-SHA256 signed headers (for API requests)
-- **Order Signing**: EIP-712 typed data signature for CTF Exchange
+### Tick Size System
+- CLOB API: each market has `minimum_tick_size` (0.1, 0.01, 0.001, or 0.0001)
+- Political markets: typically 0.001 → enables $0.999 pricing
+- Sports markets: typically 0.01 → max $0.99
+- Order amounts rounded per ROUNDING_CONFIG: amount_decimals = price_decimals + 2
 
-### Wallet Architecture
-- **EOA Wallet** (`POLY_WALLET_ADDRESS`): Signs transactions, owns the proxy
-- **Proxy Wallet** (`POLY_PROXY_WALLET`): Holds funds, is the `maker` in orders
-- **Signature Type**: 1 (POLY_PROXY) — EOA signs, proxy funds
+### Arbitrage Scanner (Active, rarely finds opportunities)
+- Checks if YES ask + NO ask < $0.985
+- If found: buy both sides for guaranteed profit
+- Market makers keep spreads tight — rarely triggers
 
-### Contract Addresses (Polygon Mainnet)
-- Normal Exchange: `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
-- Neg Risk Exchange: `0xC5d563A36AE78145C45a50134d48A1215220f80a`
-- USDC (PoS): `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`
-- CTF Tokens: `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`
+### AI Evaluator (Paused)
+- Two-tier: Haiku screens 20 markets → Sonnet deep-evaluates flagged ones
+- Contrarian filter: Sonnet-confirmed signals get $0.03 min price
+- Cost: ~$1.50/day when active
 
-### APIs
-- **Gamma API**: `https://gamma-api.polymarket.com` — Market data, search
-- **CLOB API**: `https://clob.polymarket.com` — Auth, orders, balance, trades
-- **Anthropic API**: Claude 3.5 Haiku for market evaluation
+## Critical Rules
+- **NEVER commit .env or hardcoded keys** — use dotenv
+- **Unicode:** No Unicode arrows/special chars in log messages (Windows cp1252 crashes)
+- **dotenv:** Must use `dotenvy::dotenv_override()` (system has conflicting ANTHROPIC_API_KEY)
+- **CLOB price constraint:** Price must be >0 and <1. Max submittable = tick_size dependent
+- **Addresses must be checksummed** for CLOB API
+- **signature_type=1** for proxy wallet orders
+- **CLOB API keys are deterministic** — derived from wallet private key, cannot be rotated
+- **PM2 release build:** Must stop ALL processes sharing the exe before `cargo build --release`
+- **Sniper dedup:** Track by `condition_id`, NOT slug or token_id
 
-## Environment Variables (.env)
-```
-POLY_WALLET_ADDRESS=<EOA checksummed address>
-POLY_PROXY_WALLET=<Proxy wallet address>
-POLY_PRIVATE_KEY=<Private key with 0x prefix>
-POLY_API_KEY=<CLOB API key>
-POLY_API_SECRET=<CLOB API secret (base64)>
-POLY_PASSPHRASE=<CLOB passphrase>
-ANTHROPIC_API_KEY=<Claude API key>
-TELEGRAM_BOT_TOKEN=<Telegram bot token>
-TELEGRAM_CHAT_ID=<Chat ID for notifications>
-```
+## Wallet
+- **EOA (signer):** 0x7ec329D34D2c94456c015B236EBEc41d2a7B3Bce
+- **Proxy (funder/maker):** 0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853
+- **Contract:** Neg risk exchange on Polygon (chain 137)
 
-## CLI Commands
+## PM2 Commands
 ```bash
-cargo run -- markets [-q query] [-l limit]   # List markets
-cargo run -- market <slug>                    # Market details
-cargo run -- book <token_id>                  # Order book
-cargo run -- account                          # Balance + positions
-cargo run -- buy <slug> <yes/no> <$amount> [--dry-run]
-cargo run -- sell <slug> <yes/no> <shares> [--dry-run]
-cargo run -- run [--dry-run]                  # Start strategy engine
-cargo run -- paper buy/sell/portfolio/history/reset
+pm2 restart polymarket-arb   # Restart sniper/arb
+pm2 logs polymarket-arb       # View logs
+pm2 stop polymarket-bot       # AI bot is stopped
 ```
-
-## Common Issues
-- **401 Unauthorized**: Use EOA address (not proxy) for POLY_ADDRESS header
-- **Gzip garbled response**: Don't send Accept-Encoding: gzip (reqwest handles it)
-- **"Invalid order payload"**: Addresses must be checksummed, salt must be number not string
-- **"price must be < 1"**: CLOB rejects prices >= 1.0, round carefully
-- **"min size: $1"**: Minimum order value is $1 USDC
-- **balance-allowance returns 0**: Use `asset_type=COLLATERAL` and `signature_type=1` (not 2)
-- **PowerShell git push "errors"**: stderr output from git is normal, push succeeds
-
-## Development Notes
-- Always test with `--dry-run` before real trades
-- Never commit .env file
-- Use `cargo run -- account` to verify balance before trading
-- The py_clob_client Python package is useful for debugging auth issues
-- Salt generation: `timestamp * random()` (matches Python client)
-- Fast-resolving market prioritization: sports > crypto daily > esports > politics
-- Telegram notifications go to configured chat for all signals, trades, and errors
