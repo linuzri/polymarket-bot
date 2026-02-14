@@ -89,6 +89,7 @@ pub struct ArbScanner {
     sniper_profit: f64,
     sniper_committed: f64, // total USD committed to sniper orders (locks balance)
     sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
+    tick_size_cache: std::collections::HashMap<String, f64>, // condition_id -> tick_size
     cycle_count: u64,
     last_summary_cycle: u64,
 }
@@ -110,6 +111,7 @@ impl ArbScanner {
             sniper_profit: 0.0,
             sniper_committed: 0.0, // reset on restart — orders may have filled or expired
             sniped_markets: std::collections::HashSet::new(),
+            tick_size_cache: std::collections::HashMap::new(),
             cycle_count: 0,
             last_summary_cycle: 0,
         }
@@ -352,7 +354,7 @@ impl ArbScanner {
     }
 
     /// Check a market for sniper opportunity (near-resolved, buy winning side cheap)
-    async fn check_sniper(&self, client: &PolymarketClient, market: &GammaMarket) -> Option<SniperOpportunity> {
+    async fn check_sniper(&mut self, client: &PolymarketClient, market: &GammaMarket) -> Option<SniperOpportunity> {
         let question = market.question.as_deref()?;
         let slug = market.slug.as_deref()?;
         let cid = market.condition_id.as_deref()?;
@@ -409,8 +411,14 @@ impl ArbScanner {
             return None;
         };
 
-        // Fetch tick size to determine max price precision
-        let tick_size = client.get_tick_size(cid).await.unwrap_or(0.01);
+        // Fetch tick size (cached to avoid API call per candidate per cycle)
+        let tick_size = if let Some(&cached) = self.tick_size_cache.get(cid) {
+            cached
+        } else {
+            let ts = client.get_tick_size(cid).await.unwrap_or(0.01);
+            self.tick_size_cache.insert(cid.to_string(), ts);
+            ts
+        };
         // Max price depends on tick size: 0.001 tick -> max 0.999, 0.01 tick -> max 0.99
         let effective_max = if tick_size <= 0.001 { SNIPER_MAX_PRICE } else { 0.99 };
 
