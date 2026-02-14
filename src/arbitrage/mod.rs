@@ -19,8 +19,8 @@ const SCAN_INTERVAL_SECS: u64 = 30;
 const SNIPER_MIN_PRICE: f64 = 0.95;
 /// Maximum price we'll pay (99.9¢ for 0.001 tick markets, 99¢ for 0.01 tick)
 const SNIPER_MAX_PRICE: f64 = 0.999;
-/// Maximum USD per sniper trade (bigger size = more profit per trade)
-const SNIPER_MAX_SIZE: f64 = 30.0;
+/// Maximum USD per sniper trade (sized for current balance ~$16)
+const SNIPER_MAX_SIZE: f64 = 10.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
 const SNIPER_MIN_VOLUME: f64 = 100_000.0;
 
@@ -500,7 +500,7 @@ impl ArbScanner {
             sniper_opps.sort_by(|a, b| b.expected_profit_pct.partial_cmp(&a.expected_profit_pct).unwrap());
 
             // Execute top sniper opportunities (max 5 per cycle — Anjun does 10/day)
-            for opp in sniper_opps.iter().take(5) {
+            for opp in sniper_opps.iter().take(1) {
                 if let Err(e) = self.execute_sniper(opp).await {
                     error!("Sniper execution failed: {}", e);
                 }
