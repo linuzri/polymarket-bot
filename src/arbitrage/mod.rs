@@ -17,8 +17,8 @@ const SCAN_INTERVAL_SECS: u64 = 30;
 // --- Sniper constants ---
 /// Minimum price to consider "near-resolved" (99%+ certainty, Anjun-style)
 const SNIPER_MIN_PRICE: f64 = 0.95;
-/// Maximum price we'll pay (up to 99.9¢ like Anjun)
-const SNIPER_MAX_PRICE: f64 = 0.999;
+/// Maximum price we'll pay (99¢ — CLOB rounds to 2 decimals, $1.00 is rejected)
+const SNIPER_MAX_PRICE: f64 = 0.99;
 /// Maximum USD per sniper trade (bigger size = more profit per trade)
 const SNIPER_MAX_SIZE: f64 = 30.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
