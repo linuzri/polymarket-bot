@@ -102,7 +102,7 @@ impl ArbScanner {
             total_profit: 0.0,
             sniper_trades: 0,
             sniper_profit: 0.0,
-            sniper_committed: 70.0, // assume fully invested on restart (orders persist across restarts)
+            sniper_committed: 0.0, // reset on restart — orders may have filled or expired
             sniped_markets: std::collections::HashSet::new(),
         }
     }
@@ -519,12 +519,15 @@ impl ArbScanner {
             // Sort by profit % descending
             sniper_opps.sort_by(|a, b| b.expected_profit_pct.partial_cmp(&a.expected_profit_pct).unwrap());
 
-            // Execute top sniper opportunities (max 5 per cycle — Anjun does 10/day)
+            // Execute top sniper opportunities
             for opp in sniper_opps.iter().take(2) {
                 if let Err(e) = self.execute_sniper(opp).await {
                     error!("Sniper execution failed: {}", e);
                 }
             }
+
+            println!("  Sniper: {} trades placed (${:.0} committed / ${:.0} limit) | {} candidates found",
+                self.sniper_trades, self.sniper_committed, MAX_SNIPER_EXPOSURE, sniper_opps.len());
         }
 
         Ok(())
