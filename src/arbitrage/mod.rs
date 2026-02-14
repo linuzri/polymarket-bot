@@ -85,6 +85,8 @@ pub struct ArbScanner {
     sniper_profit: f64,
     sniper_committed: f64, // total USD committed to sniper orders (locks balance)
     sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
+    cycle_count: u64,
+    last_summary_cycle: u64,
 }
 
 impl ArbScanner {
@@ -104,6 +106,8 @@ impl ArbScanner {
             sniper_profit: 0.0,
             sniper_committed: 0.0, // reset on restart — orders may have filled or expired
             sniped_markets: std::collections::HashSet::new(),
+            cycle_count: 0,
+            last_summary_cycle: 0,
         }
     }
 
@@ -438,8 +442,52 @@ impl ArbScanner {
         Ok(())
     }
 
+    /// Send hourly portfolio summary to Telegram
+    async fn send_portfolio_summary(&self) {
+        // Fetch open orders count via simple HTTP (no auth needed for portfolio file)
+        let portfolio_path = "portfolio_state.json";
+        let summary = match std::fs::read_to_string(portfolio_path) {
+            Ok(data) => {
+                match serde_json::from_str::<serde_json::Value>(&data) {
+                    Ok(state) => {
+                        let positions = state.get("positions")
+                            .and_then(|p| p.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        let total_invested: f64 = state.get("positions")
+                            .and_then(|p| p.as_array())
+                            .map(|arr| arr.iter()
+                                .filter_map(|p| p.get("cost_basis").and_then(|v| v.as_f64()))
+                                .sum())
+                            .unwrap_or(0.0);
+                        let resolved = state.get("resolved")
+                            .and_then(|r| r.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        let realized_pnl: f64 = state.get("resolved")
+                            .and_then(|r| r.as_array())
+                            .map(|arr| arr.iter()
+                                .filter_map(|p| p.get("pnl").and_then(|v| v.as_f64()))
+                                .sum())
+                            .unwrap_or(0.0);
+                        format!(
+                            "Portfolio Summary\n\nOpen positions: {}\nTotal invested: ${:.2}\nResolved: {}\nRealized P/L: ${:.2}\n\nSniper stats (this session):\nTrades: {} | Committed: ${:.0} / ${:.0}\nSniped markets: {}",
+                            positions, total_invested, resolved, realized_pnl,
+                            self.sniper_trades, self.sniper_committed, MAX_SNIPER_EXPOSURE,
+                            self.sniped_markets.len()
+                        )
+                    }
+                    Err(_) => format!("Portfolio Summary\n\nSniper trades: {} | Committed: ${:.0}", self.sniper_trades, self.sniper_committed)
+                }
+            }
+            Err(_) => format!("Portfolio Summary\n\nSniper trades: {} | Committed: ${:.0}", self.sniper_trades, self.sniper_committed)
+        };
+        self.notifier.send(&summary).await;
+    }
+
     /// Run one scan cycle
     async fn run_cycle(&mut self) -> Result<()> {
+        self.cycle_count += 1;
         let markets = self.fetch_markets().await?;
         println!("Scanned {} markets", markets.len());
 
@@ -528,6 +576,12 @@ impl ArbScanner {
 
             println!("  Sniper: {} trades placed (${:.0} committed / ${:.0} limit) | {} candidates found",
                 self.sniper_trades, self.sniper_committed, MAX_SNIPER_EXPOSURE, sniper_opps.len());
+        }
+
+        // Hourly portfolio summary (~120 cycles at 30s = 1 hour)
+        if self.cycle_count - self.last_summary_cycle >= 120 {
+            self.last_summary_cycle = self.cycle_count;
+            self.send_portfolio_summary().await;
         }
 
         Ok(())
