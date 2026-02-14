@@ -23,6 +23,8 @@ const SNIPER_MAX_PRICE: f64 = 0.999;
 const SNIPER_MAX_SIZE: f64 = 25.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
 const SNIPER_MIN_VOLUME: f64 = 100_000.0;
+/// Max total USD committed to sniper orders (leave buffer from portfolio)
+const MAX_SNIPER_EXPOSURE: f64 = 70.0;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -100,7 +102,7 @@ impl ArbScanner {
             total_profit: 0.0,
             sniper_trades: 0,
             sniper_profit: 0.0,
-            sniper_committed: 0.0,
+            sniper_committed: 70.0, // assume fully invested on restart (orders persist across restarts)
             sniped_markets: std::collections::HashSet::new(),
         }
     }
@@ -368,8 +370,7 @@ impl ArbScanner {
 
     /// Execute a sniper trade: buy the near-certain winning side
     async fn execute_sniper(&mut self, opp: &SniperOpportunity) -> Result<()> {
-        // Max exposure check: don't exceed $70 total committed (leave buffer from $92 portfolio)
-        const MAX_SNIPER_EXPOSURE: f64 = 70.0;
+        // Max exposure check
         let remaining = MAX_SNIPER_EXPOSURE - self.sniper_committed;
         if remaining < 5.0 {
             info!("Sniper exposure limit reached (${:.0} committed) - skipping", self.sniper_committed);
@@ -421,8 +422,15 @@ impl ArbScanner {
                 self.notifier.send(&msg).await;
             }
             Err(e) => {
-                error!("Sniper order failed: {}", e);
-                self.notifier.notify_error("Sniper order", &e.to_string()).await;
+                let msg = e.to_string();
+                error!("Sniper order failed: {}", msg);
+                // Don't spam Telegram for balance errors — expected when fully invested
+                if !msg.contains("not enough balance") {
+                    self.notifier.notify_error("Sniper order", &msg).await;
+                } else {
+                    // We're fully invested — set committed to max to stop retrying
+                    self.sniper_committed = MAX_SNIPER_EXPOSURE;
+                }
                 return Err(e);
             }
         }
