@@ -15,16 +15,18 @@ const MAX_ARB_SIZE: f64 = 10.0;
 const SCAN_INTERVAL_SECS: u64 = 30;
 
 // --- Sniper constants ---
-/// Minimum price to consider "near-resolved" (99%+ certainty, Anjun-style)
-const SNIPER_MIN_PRICE: f64 = 0.95;
+/// Minimum price to consider "near-resolved"
+const SNIPER_MIN_PRICE: f64 = 0.90; // lowered from 0.95 — more opportunities, higher profit
 /// Maximum price we'll pay (99.9¢ for 0.001 tick markets, 99¢ for 0.01 tick)
 const SNIPER_MAX_PRICE: f64 = 0.999;
 /// Maximum USD per sniper trade
 const SNIPER_MAX_SIZE: f64 = 25.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
-const SNIPER_MIN_VOLUME: f64 = 100_000.0;
+const SNIPER_MIN_VOLUME: f64 = 50_000.0; // lowered from 100K — more fast-resolving markets
 /// Max total USD committed to sniper orders (leave buffer from portfolio)
 const MAX_SNIPER_EXPOSURE: f64 = 70.0;
+/// Maximum days until resolution for sniper targets (skip 2028 presidential etc.)
+const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 90.0;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -52,6 +54,8 @@ pub struct SniperOpportunity {
     pub neg_risk: bool,
     pub volume: f64,
     pub tick_size: f64,
+    pub days_to_resolve: f64, // estimated days until resolution
+    pub score: f64,           // higher = better (profit% / sqrt(days))
 }
 
 /// Raw Gamma API market
@@ -302,6 +306,32 @@ impl ArbScanner {
             return None;
         }
 
+        // Calculate days to resolution
+        let days_to_resolve = match &market.end_date_iso {
+            Some(end_date) => {
+                // Parse ISO date string
+                if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_date) {
+                    let now = chrono::Utc::now();
+                    let diff = end.signed_duration_since(now);
+                    let days = diff.num_hours() as f64 / 24.0;
+                    if days < 0.0 { 0.1 } else { days } // already past = resolves very soon
+                } else if let Ok(end) = chrono::NaiveDateTime::parse_from_str(end_date, "%Y-%m-%dT%H:%M:%S%.fZ") {
+                    let now = chrono::Utc::now().naive_utc();
+                    let diff = end.signed_duration_since(now);
+                    let days = diff.num_hours() as f64 / 24.0;
+                    if days < 0.0 { 0.1 } else { days }
+                } else {
+                    365.0 // unknown = assume far out
+                }
+            }
+            None => 365.0, // no end date = assume far out
+        };
+
+        // Skip markets that won't resolve for a long time
+        if days_to_resolve > SNIPER_MAX_DAYS_TO_RESOLVE {
+            return None;
+        }
+
         // Parse prices
         let prices: Vec<f64> = market.outcome_prices
             .as_deref()
@@ -343,7 +373,7 @@ impl ArbScanner {
 
         // Fetch tick size to determine max price precision
         let tick_size = client.get_tick_size(cid).await.unwrap_or(0.01);
-        // Max price depends on tick size: 0.001 tick → max 0.999, 0.01 tick → max 0.99
+        // Max price depends on tick size: 0.001 tick -> max 0.999, 0.01 tick -> max 0.99
         let effective_max = if tick_size <= 0.001 { SNIPER_MAX_PRICE } else { 0.99 };
 
         // Check order book for actual ask price
@@ -357,6 +387,11 @@ impl ArbScanner {
 
         let expected_profit_pct = (1.0 - ask_price) / ask_price;
 
+        // Score: profit% / sqrt(days) — favors high profit AND fast resolution
+        // A 5% trade resolving in 1 day scores 5.0
+        // A 0.1% trade resolving in 365 days scores 0.005
+        let score = expected_profit_pct * 100.0 / (days_to_resolve.max(0.1)).sqrt();
+
         Some(SniperOpportunity {
             condition_id: cid.to_string(),
             question: question.to_string(),
@@ -369,6 +404,8 @@ impl ArbScanner {
             neg_risk: market.neg_risk.unwrap_or(true),
             volume,
             tick_size,
+            days_to_resolve,
+            score,
         })
     }
 
@@ -415,13 +452,20 @@ impl ArbScanner {
                 // Track to avoid re-sniping
                 self.sniped_markets.insert(opp.condition_id.clone());
 
+                let resolve_str = if opp.days_to_resolve < 1.0 {
+                    format!("{:.0}h", opp.days_to_resolve * 24.0)
+                } else if opp.days_to_resolve < 30.0 {
+                    format!("{:.0} days", opp.days_to_resolve)
+                } else {
+                    format!("{:.0} months", opp.days_to_resolve / 30.0)
+                };
                 let msg = format!(
-                    "Sniper Trade #{}\n\n\"{}\"\n\nBUY {:.2} {} @ ${:.4} = ${:.2}\nExpected payout: ${:.2}\nExpected profit: ${:.2} ({:.1}%)\n\nNote: ~{:.0}% chance this resolves in our favor",
+                    "Sniper Trade #{}\n\n\"{}\"\n\nBUY {:.2} {} @ ${:.4} = ${:.2}\nProfit: ${:.2} ({:.1}%)\nResolves in: ~{}\nScore: {:.2}",
                     self.sniper_trades,
                     truncate(&opp.question, 60),
                     shares, opp.side, opp.ask_price, cost,
-                    expected_payout, expected_profit, opp.expected_profit_pct * 100.0,
-                    opp.ask_price * 100.0
+                    expected_profit, opp.expected_profit_pct * 100.0,
+                    resolve_str, opp.score
                 );
                 self.notifier.send(&msg).await;
             }
@@ -553,22 +597,23 @@ impl ArbScanner {
             for market in &sniper_candidates {
                 if let Some(opp) = self.check_sniper(&client, market).await {
                     println!(
-                        "  >> SNIPER: \"{}\" | {} @ ${:.4} | Profit: {:.1}% | Vol: ${:.0}K",
-                        truncate(&opp.question, 50),
+                        "  >> SNIPER: \"{}\" | {} @ ${:.4} | +{:.1}% | {:.0}d | score:{:.2}",
+                        truncate(&opp.question, 45),
                         opp.side, opp.ask_price,
                         opp.expected_profit_pct * 100.0,
-                        opp.volume / 1000.0
+                        opp.days_to_resolve,
+                        opp.score
                     );
                     sniper_opps.push(opp);
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
 
-            // Sort by profit % descending
-            sniper_opps.sort_by(|a, b| b.expected_profit_pct.partial_cmp(&a.expected_profit_pct).unwrap());
+            // Sort by score descending (profit% / sqrt(days) — favors fast + profitable)
+            sniper_opps.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
             // Execute top sniper opportunities
-            for opp in sniper_opps.iter().take(2) {
+            for opp in sniper_opps.iter().take(3) {
                 if let Err(e) = self.execute_sniper(opp).await {
                     error!("Sniper execution failed: {}", e);
                 }
