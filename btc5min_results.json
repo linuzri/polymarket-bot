@@ -1,0 +1,144 @@
+{
+  "trades": [
+    {
+      "timestamp": "2026-02-14T00:27:05.825860500+00:00",
+      "market_slug": "btc-updown-5m-1771028700",
+      "signal": "SELL",
+      "confidence": 0.763,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "loss",
+      "models": {
+        "xgb": "SELL",
+        "lgb": "SELL",
+        "rf": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:32:10.159973600+00:00",
+      "market_slug": "btc-updown-5m-1771029000",
+      "signal": "SELL",
+      "confidence": 0.754,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "loss",
+      "models": {
+        "rf": "SELL",
+        "xgb": "SELL",
+        "lgb": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:35:45.696562900+00:00",
+      "market_slug": "btc-updown-5m-1771029300",
+      "signal": "SELL",
+      "confidence": 0.7544,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "win",
+      "models": {
+        "lgb": "SELL",
+        "rf": "SELL",
+        "xgb": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:40:58.235375900+00:00",
+      "market_slug": "btc-updown-5m-1771029600",
+      "signal": "SELL",
+      "confidence": 0.765,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "loss",
+      "models": {
+        "rf": "SELL",
+        "lgb": "SELL",
+        "xgb": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:45:11.764563300+00:00",
+      "market_slug": "btc-updown-5m-1771029900",
+      "signal": "SELL",
+      "confidence": 0.7755,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "loss",
+      "models": {
+        "rf": "SELL",
+        "lgb": "SELL",
+        "xgb": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:50:26.439523400+00:00",
+      "market_slug": "btc-updown-5m-1771030200",
+      "signal": "SELL",
+      "confidence": 0.8134,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": "loss",
+      "models": {
+        "xgb": "SELL",
+        "rf": "SELL",
+        "lgb": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T00:55:14.187905100+00:00",
+      "market_slug": "btc-updown-5m-1771030500",
+      "signal": "SELL",
+      "confidence": 0.797,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": null,
+      "models": {
+        "xgb": "SELL",
+        "lgb": "SELL",
+        "rf": "SELL"
+      }
+    },
+    {
+      "timestamp": "2026-02-14T01:00:16.853816600+00:00",
+      "market_slug": "btc-updown-5m-1771030800",
+      "signal": "SELL",
+      "confidence": 0.7992,
+      "side": "Down",
+      "amount_usd": 2.0,
+      "price": 0.99,
+      "shares": 2.0202020202020203,
+      "dry_run": true,
+      "resolved": null,
+      "models": {
+        "rf": "SELL",
+        "lgb": "SELL",
+        "xgb": "SELL"
+      }
+    }
+  ],
+  "total_trades": 8,
+  "wins": 1,
+  "losses": 5,
+  "skipped": 0
+}

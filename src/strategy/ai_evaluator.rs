@@ -127,8 +127,10 @@ impl AiEvaluator {
                             signal.estimated_probability * 100.0, signal.edge * 100.0, signal.side,
                             tier2_signal.estimated_probability * 100.0, tier2_signal.edge * 100.0, tier2_signal.side);
                         println!("     Sonnet reason: \"{}\"\n", tier2_signal.reason);
-                        // Use Sonnet's evaluation (more accurate)
-                        signals.push(tier2_signal);
+                        // Use Sonnet's evaluation (more accurate), mark as tier2 confirmed
+                        let mut confirmed = tier2_signal;
+                        confirmed.tier2_confirmed = true;
+                        signals.push(confirmed);
                     }
                     Ok(None) => {
                         println!("  \u{274c} Tier 2 REJECTED: \"{}\"", truncate(&signal.market.question, 55));
@@ -264,6 +266,7 @@ Where:
             confidence: estimate.confidence,
             edge,
             reason: estimate.reasoning,
+            tier2_confirmed: false,
         }))
     }
 }

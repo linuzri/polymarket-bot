@@ -79,8 +79,10 @@ impl RiskManager {
         };
 
         // Minimum price filter - don't buy lottery tickets
-        if price < 0.10 {
-            tracing::debug!("Risk: price too low (${:.4}) - skipping lottery ticket", price);
+        // Sonnet-confirmed signals get a lower threshold ($0.03) for contrarian bets
+        let min_price = if signal.tier2_confirmed { 0.03 } else { 0.10 };
+        if price < min_price {
+            tracing::debug!("Risk: price too low (${:.4} < ${:.2}) - skipping lottery ticket", price, min_price);
             return None;
         }
 

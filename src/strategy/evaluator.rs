@@ -9,6 +9,9 @@ pub struct Signal {
     pub confidence: f64,
     pub edge: f64,
     pub reason: String,
+    /// Whether this signal was confirmed by Tier 2 (Sonnet) evaluation
+    #[allow(dead_code)]
+    pub tier2_confirmed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -159,6 +162,7 @@ impl Evaluator {
             confidence,
             edge: adjusted_edge,
             reason,
+            tier2_confirmed: false,
         })
     }
 }
