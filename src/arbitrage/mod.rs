@@ -15,14 +15,14 @@ const MAX_ARB_SIZE: f64 = 10.0;
 const SCAN_INTERVAL_SECS: u64 = 30;
 
 // --- Sniper constants ---
-/// Minimum price to consider "near-resolved" (95%+ certainty)
+/// Minimum price to consider "near-resolved" (99%+ certainty, Anjun-style)
 const SNIPER_MIN_PRICE: f64 = 0.95;
-/// Maximum price we'll pay (must leave room for profit)
-const SNIPER_MAX_PRICE: f64 = 0.99;
-/// Maximum USD per sniper trade
-const SNIPER_MAX_SIZE: f64 = 10.0;
-/// Minimum volume for sniper targets (avoid illiquid markets)
-const SNIPER_MIN_VOLUME: f64 = 50_000.0;
+/// Maximum price we'll pay (up to 99.9¢ like Anjun)
+const SNIPER_MAX_PRICE: f64 = 0.999;
+/// Maximum USD per sniper trade (bigger size = more profit per trade)
+const SNIPER_MAX_SIZE: f64 = 30.0;
+/// Minimum volume for sniper targets (need liquidity for tight spreads)
+const SNIPER_MIN_VOLUME: f64 = 100_000.0;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -492,8 +492,8 @@ impl ArbScanner {
             // Sort by profit % descending
             sniper_opps.sort_by(|a, b| b.expected_profit_pct.partial_cmp(&a.expected_profit_pct).unwrap());
 
-            // Execute top sniper opportunities (max 2 per cycle to manage risk)
-            for opp in sniper_opps.iter().take(2) {
+            // Execute top sniper opportunities (max 5 per cycle — Anjun does 10/day)
+            for opp in sniper_opps.iter().take(5) {
                 if let Err(e) = self.execute_sniper(opp).await {
                     error!("Sniper execution failed: {}", e);
                 }

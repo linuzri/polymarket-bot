@@ -24,6 +24,18 @@
       "current_price": 0.0005,
       "opened_at": "2026-02-13T11:44:58.413503100Z"
     },
+    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no": {
+      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
+      "token_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no",
+      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
+      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
+      "side": "NO",
+      "shares": 206.14263404476833,
+      "cost_basis": 10.0,
+      "avg_entry_price": 0.04851010101010102,
+      "current_price": 0.0435,
+      "opened_at": "2026-02-13T12:36:35.646531400Z"
+    },
     "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes": {
       "condition_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093",
       "token_id": "0xe546672750517f62c45a5a00067481981e62b9c20fa8220203232c9dc8fd2093_yes",
@@ -35,18 +47,6 @@
       "avg_entry_price": 0.235,
       "current_price": 0.245,
       "opened_at": "2026-02-13T10:18:12.251698400Z"
-    },
-    "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no": {
-      "condition_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc",
-      "token_id": "0x61b66d02793b4a68ab0cc25be60d65f517fe18c7d654041281bb130341244fcc_no",
-      "market_slug": "will-trump-nominate-kevin-warsh-as-the-next-fed-chair",
-      "market_question": "Will Trump nominate Kevin Warsh as the next Fed chair?",
-      "side": "NO",
-      "shares": 206.14263404476833,
-      "cost_basis": 10.0,
-      "avg_entry_price": 0.04851010101010102,
-      "current_price": 0.044,
-      "opened_at": "2026-02-13T12:36:35.646531400Z"
     }
   },
   "resolved": [
@@ -92,5 +92,5 @@
     "d248a506-dc36-4c87-8a0e-dd7a77568e0f",
     "71d187ab-393d-4a43-9daa-ac37f0454849"
   ],
-  "last_updated": "2026-02-14T04:32:16.807097300Z"
+  "last_updated": "2026-02-14T05:40:33.555391800Z"
 }
