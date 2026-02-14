@@ -39,6 +39,7 @@ pub struct ArbOpportunity {
 
 #[derive(Debug, Clone)]
 pub struct SniperOpportunity {
+    pub condition_id: String,
     pub question: String,
     pub slug: String,
     pub token_id: String,
@@ -343,6 +344,7 @@ impl ArbScanner {
         let expected_profit_pct = (1.0 - ask_price) / ask_price;
 
         Some(SniperOpportunity {
+            condition_id: cid.to_string(),
             question: question.to_string(),
             slug: slug.to_string(),
             token_id: tokens[token_idx].clone(),
@@ -387,7 +389,7 @@ impl ArbScanner {
                 self.sniper_profit += expected_profit;
 
                 // Track to avoid re-sniping
-                self.sniped_markets.insert(opp.slug.clone());
+                self.sniped_markets.insert(opp.condition_id.clone());
 
                 let msg = format!(
                     "Sniper Trade #{}\n\n\"{}\"\n\nBUY {:.2} {} @ ${:.4} = ${:.2}\nExpected payout: ${:.2}\nExpected profit: ${:.2} ({:.1}%)\n\nNote: ~{:.0}% chance this resolves in our favor",
