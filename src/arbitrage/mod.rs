@@ -23,8 +23,10 @@ const SNIPER_MAX_PRICE: f64 = 0.999;
 const SNIPER_MAX_SIZE: f64 = 25.0;
 /// Minimum volume for sniper targets (need liquidity for tight spreads)
 const SNIPER_MIN_VOLUME: f64 = 50_000.0; // lowered from 100K — more fast-resolving markets
-/// Max total USD committed to sniper orders (leave buffer from portfolio)
-const MAX_SNIPER_EXPOSURE: f64 = 70.0;
+/// Default max exposure (fallback if balance fetch fails)
+const DEFAULT_MAX_SNIPER_EXPOSURE: f64 = 70.0;
+/// Reserve buffer — always keep this much USD available (don't invest 100%)
+const SNIPER_RESERVE_BUFFER: f64 = 1.0;
 /// Maximum days until resolution for sniper targets (skip 2028 presidential etc.)
 const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 365.0;
 
@@ -88,6 +90,7 @@ pub struct ArbScanner {
     sniper_trades: u64,
     sniper_profit: f64,
     sniper_committed: f64, // total USD committed to sniper orders (locks balance)
+    max_sniper_exposure: f64, // dynamic limit based on balance
     sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
     tick_size_cache: std::collections::HashMap<String, f64>, // condition_id -> tick_size
     cycle_count: u64,
@@ -110,6 +113,7 @@ impl ArbScanner {
             sniper_trades: 0,
             sniper_profit: 0.0,
             sniper_committed: 0.0, // reset on restart — orders may have filled or expired
+            max_sniper_exposure: DEFAULT_MAX_SNIPER_EXPOSURE,
             sniped_markets: std::collections::HashSet::new(),
             tick_size_cache: std::collections::HashMap::new(),
             cycle_count: 0,
@@ -457,10 +461,10 @@ impl ArbScanner {
 
     /// Execute a sniper trade: buy the near-certain winning side
     async fn execute_sniper(&mut self, opp: &SniperOpportunity) -> Result<()> {
-        // Max exposure check
-        let remaining = MAX_SNIPER_EXPOSURE - self.sniper_committed;
+        // Max exposure check (dynamic based on balance)
+        let remaining = self.max_sniper_exposure - self.sniper_committed;
         if remaining < 5.0 {
-            info!("Sniper exposure limit reached (${:.0} committed) - skipping", self.sniper_committed);
+            info!("Sniper exposure limit reached (${:.0} committed / ${:.0} limit) - skipping", self.sniper_committed, self.max_sniper_exposure);
             return Ok(());
         }
         let trade_size = SNIPER_MAX_SIZE.min(remaining);
@@ -523,7 +527,7 @@ impl ArbScanner {
                     self.notifier.notify_error("Sniper order", &msg).await;
                 } else {
                     // We're fully invested — set committed to max to stop retrying
-                    self.sniper_committed = MAX_SNIPER_EXPOSURE;
+                    self.sniper_committed = self.max_sniper_exposure;
                 }
                 return Err(e);
             }
@@ -563,7 +567,7 @@ impl ArbScanner {
                         format!(
                             "Portfolio Summary\n\nOpen positions: {}\nTotal invested: ${:.2}\nResolved: {}\nRealized P/L: ${:.2}\n\nSniper stats (this session):\nTrades: {} | Committed: ${:.0} / ${:.0}\nSniped markets: {}",
                             positions, total_invested, resolved, realized_pnl,
-                            self.sniper_trades, self.sniper_committed, MAX_SNIPER_EXPOSURE,
+                            self.sniper_trades, self.sniper_committed, self.max_sniper_exposure,
                             self.sniped_markets.len()
                         )
                     }
@@ -582,6 +586,28 @@ impl ArbScanner {
         println!("Scanned {} markets", markets.len());
 
         let client = PolymarketClient::new()?;
+
+        // Fetch real balance to set dynamic exposure limit
+        match client.get_balance().await {
+            Ok(balance) => {
+                let new_limit = (balance - SNIPER_RESERVE_BUFFER).max(0.0);
+                if (new_limit - self.max_sniper_exposure).abs() > 1.0 {
+                    info!("Updated sniper exposure limit: ${:.2} -> ${:.2} (balance: ${:.2})",
+                        self.max_sniper_exposure, new_limit, balance);
+                }
+                self.max_sniper_exposure = new_limit;
+                // Reset committed tracker if balance suggests orders filled/expired
+                if self.sniper_committed > new_limit {
+                    self.sniper_committed = 0.0;
+                }
+            }
+            Err(e) => {
+                // Use previous limit on error (don't spam logs — balance errors expected when fully invested)
+                if self.cycle_count <= 1 {
+                    warn!("Failed to fetch balance (using default ${:.0}): {}", self.max_sniper_exposure, e);
+                }
+            }
+        }
         let mut opportunities = Vec::new();
 
         // Pre-filter markets that might have arb (Gamma mid prices suggest YES+NO < 0.99)
@@ -666,7 +692,7 @@ impl ArbScanner {
             }
 
             println!("  Sniper: {} trades placed (${:.0} committed / ${:.0} limit) | {} candidates found",
-                self.sniper_trades, self.sniper_committed, MAX_SNIPER_EXPOSURE, sniper_opps.len());
+                self.sniper_trades, self.sniper_committed, self.max_sniper_exposure, sniper_opps.len());
         }
 
         // Hourly portfolio summary (~120 cycles at 30s = 1 hour)
