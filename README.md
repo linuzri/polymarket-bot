@@ -4,32 +4,39 @@ Automated prediction market trading bot for [Polymarket](https://polymarket.com)
 
 ## 🔴 Live Trading Status
 
-- **Balance:** ~$92.40 USDC
+- **Balance:** ~$1.64 USDC cash + ~$87 in positions
 - **Initial Deposit:** $100.27
-- **Strategy:** Risk-free sniper + arbitrage scanner
-- **Process:** 1 (arb scanner with integrated sniper)
+- **Strategy:** 4-strategy bot (arb + multi-arb + sniper + hybrid take-profit)
+- **Process:** 1 (`polymarket-arb` PM2 id:13)
 - **Telegram notifications:** Active (trades, hourly portfolio summary, errors)
 
 ## Architecture
 
 ```
 polymarket-arb (PM2 id:13)
-├── Arbitrage Scanner — YES+NO < $0.985 spread detection
-├── Resolved-Market Sniper — buy 95-99.9¢ near-certain outcomes
-│   ├── Tick-size-aware pricing (supports 0.001 and 0.0001 tick markets)
-│   ├── Exposure limit ($70 max committed)
+├── 2-Outcome Arbitrage — YES+NO < $0.985 spread detection
+├── Multi-Outcome Arbitrage — 3-30 outcome events, sum of YES asks < $1.00
+├── Resolved-Market Sniper — buy 90-99.9¢ near-certain outcomes
+│   ├── Fast-resolving focus (30-day max resolution)
+│   ├── 3 market fetches (top volume, 24h volume, soonest-ending)
+│   ├── Tick-size-aware pricing (0.001 and 0.0001 tick markets)
+│   ├── Dynamic exposure limit (from balance)
 │   ├── Duplicate tracking (by condition_id)
-│   └── Balance error suppression
+│   └── Score: profit_pct / days_to_resolve
+├── Hybrid Take-Profit — sell sniper positions at 99¢+ bid
 └── Hourly Portfolio Summary → Telegram
 ```
 
 ## Features
 
 ### Active (Risk-Free Focus)
-- **Resolved-Market Sniper** — Buys obvious outcomes (e.g., "Will Jesus return before 2027?" NO @ $0.999)
-- **Tick-Size-Aware Pricing** — Fetches each market's `minimum_tick_size` from CLOB API, enabling 3-4 decimal price precision ($0.999, $0.9999)
-- **Arbitrage Scanner** — Scans for YES+NO price gaps where both sides sum < $0.985
-- **Exposure Management** — Tracks committed capital, stops at $70 limit
+- **Resolved-Market Sniper** — Buys obvious outcomes at 90-99.9¢, holds to resolution at $1.00
+- **Hybrid Take-Profit** — Sells sniper positions early at 99¢+ to free capital faster
+- **Multi-Outcome Arbitrage** — Buys all YES outcomes in events where sum < $1.00 (guaranteed profit)
+- **2-Outcome Arbitrage** — Scans for YES+NO price gaps where both sides sum < $0.985
+- **Fast-Resolving Focus** — Only targets markets resolving within 30 days
+- **Tick-Size-Aware Pricing** — Fetches each market's `minimum_tick_size` from CLOB API
+- **Dynamic Exposure Management** — Fetches real balance each cycle, adjusts limits
 - **Hourly Portfolio Summary** — Automated Telegram updates with positions, P/L, and stats
 - **Telegram Alerts** — Real-time notifications for every trade placed
 

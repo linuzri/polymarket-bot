@@ -3,10 +3,10 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **Pivoted to risk-free sniper strategy** — buying near-certain outcomes at 95-99.9¢ and collecting $1.00 on resolution.
 
-## Current Status (Feb 14, 2026)
-- **Balance:** ~$92.40 USDC (deposited $100.27)
-- **Strategy:** Risk-free sniper + arbitrage scanner
-- **Process:** `polymarket-arb` (PM2 id:13) — single process doing both arb + sniper
+## Current Status (Feb 15, 2026)
+- **Balance:** ~$1.64 USDC cash + ~$87 in positions (deposited $100.27)
+- **Strategy:** 4-strategy bot (arb + multi-arb + sniper + hybrid take-profit)
+- **Process:** `polymarket-arb` (PM2 id:13) — single process, all strategies
 - **AI strategy bot:** PAUSED (PM2 id:7, stopped)
 - **Telegram:** Trade alerts + hourly portfolio summary
 
@@ -49,13 +49,28 @@ polymarket-bot/
 ## Key Concepts
 
 ### Sniper Strategy (Active)
-- Scans 300+ markets every 30s via Gamma API
-- Finds outcomes priced 95-99.9% certain
+- Scans ~400 markets every 30s via Gamma API (fast-resolving only, 30-day max)
+- 3 fetch queries: top volume, 24h volume, soonest-ending (within 7 days)
+- Finds outcomes priced 90-99.9% certain
 - Fetches `minimum_tick_size` from CLOB API per market
 - Places buy orders at ask price with correct decimal precision
 - Tracks sniped markets by `condition_id` to avoid duplicates
-- Exposure limit: $70 max committed, $25 max per trade
+- Exposure limit: dynamic from balance, $25 max per trade
+- Score formula: `profit_pct / days_to_resolve` (favors fast resolution)
 - Sends hourly portfolio summary to Telegram
+
+### Hybrid Take-Profit (Active)
+- Checks sniper positions every ~2.5 min (cycle % 5)
+- If best bid >= 99c, places limit SELL to capture profit early
+- Frees capital for new sniper buys (capital velocity)
+- Falls back to hold-to-resolution if bid stays below 99c
+
+### Multi-Outcome Arbitrage (Active, checks every ~5 min)
+- Fetches events with 3-30 outcomes from Gamma events API
+- Checks all YES order books — if sum of asks < $1.00, buys all outcomes
+- Guaranteed profit when one resolves to $1.00
+- Min 0.5% profit threshold, max $25 total
+- Market is efficient — rarely triggers (sums usually ~$1.00-1.02)
 
 ### Tick Size System
 - CLOB API: each market has `minimum_tick_size` (0.1, 0.01, 0.001, or 0.0001)
@@ -63,7 +78,7 @@ polymarket-bot/
 - Sports markets: typically 0.01 → max $0.99
 - Order amounts rounded per ROUNDING_CONFIG: amount_decimals = price_decimals + 2
 
-### Arbitrage Scanner (Active, rarely finds opportunities)
+### 2-Outcome Arbitrage (Active, rarely finds opportunities)
 - Checks if YES ask + NO ask < $0.985
 - If found: buy both sides for guaranteed profit
 - Market makers keep spreads tight — rarely triggers
