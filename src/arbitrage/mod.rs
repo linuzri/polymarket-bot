@@ -27,8 +27,8 @@ const SNIPER_MIN_VOLUME: f64 = 50_000.0; // lowered from 100K — more fast-reso
 const DEFAULT_MAX_SNIPER_EXPOSURE: f64 = 70.0;
 /// Reserve buffer — always keep this much USD available (don't invest 100%)
 const SNIPER_RESERVE_BUFFER: f64 = 1.0;
-/// Maximum days until resolution for sniper targets (skip 2028 presidential etc.)
-const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 365.0;
+/// Maximum days until resolution for sniper targets (focus on fast-resolving only)
+const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 30.0;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -121,14 +121,20 @@ impl ArbScanner {
         }
     }
 
-    /// Fetch all active markets from Gamma API
+    /// Fetch all active markets from Gamma API, focused on fast-resolving markets
     async fn fetch_markets(&self) -> Result<Vec<GammaMarket>> {
         let mut all = Vec::new();
+        let mut seen_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Fetch top volume markets
+        // Calculate end_date cutoff (30 days from now)
+        let cutoff = (chrono::Utc::now() + chrono::Duration::days(SNIPER_MAX_DAYS_TO_RESOLVE as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        // 1. Fetch top volume markets ending within cutoff
         let url = format!(
-            "{}/markets?closed=false&active=true&order=volume&ascending=false&limit=200",
-            self.gamma_url
+            "{}/markets?closed=false&active=true&order=volume&ascending=false&limit=200&end_date_max={}",
+            self.gamma_url, cutoff
         );
 
         let markets: Vec<GammaMarket> = self.http
@@ -140,22 +146,25 @@ impl ArbScanner {
             .await
             .context("Failed to parse markets")?;
 
-        all.extend(markets);
+        for m in markets {
+            if let Some(ref cid) = m.condition_id {
+                seen_cids.insert(cid.clone());
+            }
+            all.push(m);
+        }
 
-        // Also fetch by 24h volume for fast-moving markets
+        // 2. Fetch by 24h volume (fast-moving markets) with same cutoff
         let url2 = format!(
-            "{}/markets?closed=false&active=true&order=volume24hr&ascending=false&limit=100",
-            self.gamma_url
+            "{}/markets?closed=false&active=true&order=volume24hr&ascending=false&limit=100&end_date_max={}",
+            self.gamma_url, cutoff
         );
 
         if let Ok(resp) = self.http.get(&url2).send().await {
             if let Ok(fast) = resp.json::<Vec<GammaMarket>>().await {
-                let existing: std::collections::HashSet<String> = all.iter()
-                    .filter_map(|m| m.condition_id.clone())
-                    .collect();
                 for m in fast {
                     if let Some(ref cid) = m.condition_id {
-                        if !existing.contains(cid) {
+                        if !seen_cids.contains(cid) {
+                            seen_cids.insert(cid.clone());
                             all.push(m);
                         }
                     }
@@ -163,6 +172,29 @@ impl ArbScanner {
             }
         }
 
+        // 3. Fetch soonest-ending markets (resolving within 7 days — highest priority)
+        let soon_cutoff = (chrono::Utc::now() + chrono::Duration::days(7))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let url3 = format!(
+            "{}/markets?closed=false&active=true&order=endDate&ascending=true&limit=100&end_date_max={}",
+            self.gamma_url, soon_cutoff
+        );
+
+        if let Ok(resp) = self.http.get(&url3).send().await {
+            if let Ok(soon) = resp.json::<Vec<GammaMarket>>().await {
+                for m in soon {
+                    if let Some(ref cid) = m.condition_id {
+                        if !seen_cids.contains(cid) {
+                            seen_cids.insert(cid.clone());
+                            all.push(m);
+                        }
+                    }
+                }
+            }
+        }
+
+        info!("Fetched {} unique markets (end_date cutoff: {})", all.len(), cutoff);
         Ok(all)
     }
 
@@ -437,10 +469,11 @@ impl ArbScanner {
 
         let expected_profit_pct = (1.0 - ask_price) / ask_price;
 
-        // Score: profit% / sqrt(days) — favors high profit AND fast resolution
-        // A 5% trade resolving in 1 day scores 5.0
-        // A 0.1% trade resolving in 365 days scores 0.005
-        let score = expected_profit_pct * 100.0 / (days_to_resolve.max(0.1)).sqrt();
+        // Score: profit% / days — heavily favors fast resolution
+        // A 5% trade resolving in 1 day scores 500.0
+        // A 5% trade resolving in 30 days scores 16.7
+        // A 1% trade resolving in 7 days scores 14.3
+        let score = expected_profit_pct * 100.0 / (days_to_resolve.max(0.1));
 
         Some(SniperOpportunity {
             condition_id: cid.to_string(),
@@ -681,7 +714,7 @@ impl ArbScanner {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
 
-            // Sort by score descending (profit% / sqrt(days) — favors fast + profitable)
+            // Sort by score descending (profit% / days — heavily favors fast resolution)
             sniper_opps.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
             // Execute top sniper opportunities
@@ -710,13 +743,13 @@ impl ArbScanner {
         println!("\n== Polymarket Arb + Sniper Scanner - {} ==", mode);
         println!("   Scan interval: {}s", SCAN_INTERVAL_SECS);
         println!("   Arb: min spread {:.1}% | max ${:.0}/side", MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE);
-        println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K\n",
-            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0);
+        println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K | max {:.0} days\n",
+            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0, SNIPER_MAX_DAYS_TO_RESOLVE);
 
         let startup_msg = format!(
-            "Arb + Sniper Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, ${:.0}K min vol",
+            "Arb + Sniper Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, ${:.0}K min vol, {:.0}d max",
             mode, SCAN_INTERVAL_SECS, MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE,
-            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0
+            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0, SNIPER_MAX_DAYS_TO_RESOLVE
         );
         self.notifier.send(&startup_msg).await;
 
