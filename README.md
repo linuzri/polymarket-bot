@@ -49,20 +49,21 @@ polymarket-arb (PM2 id:13)
 ## Sniper Strategy
 
 The Anjun-inspired strategy:
-1. Scan 300+ active markets every 30 seconds
-2. Find outcomes priced 95-99.9% certain (near-resolved)
+1. Scan ~400 fast-resolving markets every 30 seconds (30-day max resolution)
+2. Find outcomes priced 90-99.9% certain (near-resolved)
 3. Buy the winning side at market ask price
-4. Wait for resolution → collect $1.00 per share
-5. Profit = $1.00 - buy price (0.1% to 5% per trade)
+4. Hold to resolution → collect $1.00 per share
+5. **OR** sell early at 99c+ if bid surges (hybrid take-profit)
+6. Profit = $1.00 - buy price (0.1% to 10% per trade)
 
-**Target markets:** 2028 presidential candidates, Fed nominees, expired event deadlines, sports longshots, absurd outcomes.
+**Target markets:** Sports outcomes, crypto daily prices, near-term politics, upcoming events. Filtered to resolve within 30 days.
 
 **Tick size matters:** Political markets use 0.001 tick (3 decimal prices = $0.999 possible). Sports use 0.01 tick (max $0.99).
 
 ### Risk Profile
-- **Near risk-free** — buying outcomes with 95-99.9% implied probability
+- **Near risk-free** — buying outcomes with 90-99.9% implied probability
 - **Black swan risk** — tiny chance the "impossible" happens
-- **Capital lockup** — some markets don't resolve for months/years
+- **Capital lockup** — mitigated by 30-day max + hybrid take-profit at 99c+
 - **Best at scale** — Anjun made $1M with $200K positions; at $92, returns are pennies
 
 ## Quick Start
@@ -80,11 +81,17 @@ cargo build --release
 
 ### Run
 ```bash
-# Arb + Sniper scanner (primary)
+# Arb + Sniper + Multi-Arb + Take-Profit scanner (primary)
 ./target/release/polymarket-bot arb
 
 # AI strategy bot (paused, available if needed)
 ./target/release/polymarket-bot run
+
+# View portfolio
+cmd /c ./target/release/polymarket-bot portfolio
+
+# Paper trading mode
+./target/release/polymarket-bot paper
 ```
 
 ### PM2 (Production)
@@ -97,11 +104,14 @@ pm2 start ecosystem.config.js --only polymarket-arb
 ### Sniper Constants (src/arbitrage/mod.rs)
 | Constant | Value | Description |
 |----------|-------|-------------|
-| SNIPER_MIN_PRICE | 0.95 | Minimum price (95% certainty) |
+| SNIPER_MIN_PRICE | 0.90 | Minimum price (90% certainty) |
 | SNIPER_MAX_PRICE | 0.999 | Maximum price (99.9% for 0.001 tick) |
 | SNIPER_MAX_SIZE | $25 | Max USD per trade |
-| SNIPER_MIN_VOLUME | $100K | Min market volume |
-| MAX_SNIPER_EXPOSURE | $70 | Total committed limit |
+| SNIPER_MIN_VOLUME | $50K | Min market volume |
+| SNIPER_MAX_DAYS_TO_RESOLVE | 30 | Skip markets > 30 days out |
+| TAKE_PROFIT_MIN_BID | 0.99 | Sell early if bid >= 99c |
+| MULTI_ARB_MIN_PROFIT_PCT | 0.5% | Min profit for multi-outcome arb |
+| MULTI_ARB_MAX_SIZE | $25 | Max total investment per multi-arb |
 
 ### Strategy Config (strategy_config.json)
 AI evaluator settings (when enabled): scan interval, max trade size, Kelly fraction, confidence thresholds.
@@ -126,12 +136,14 @@ AI evaluator settings (when enabled): scan interval, max trade size, Kelly fract
 - **CLOB API keys:** Deterministically derived from private key (cannot be rotated without new wallet)
 
 ## Commit History (Recent)
+- `e4cc065` — Hybrid take-profit (sell sniper at 99c+)
+- `c814edb` — Multi-outcome arbitrage scanner
+- `ebe502d` — Fast-resolving market focus (30-day max)
 - `94df988` — Hourly portfolio summary to Telegram
 - `5b1dcc5` — Tick-size-aware pricing (unlock 99.9¢)
 - `16baebd` — Resolved-market sniper
 - `6a0dfe4` — Arbitrage scanner
 - `fa2cb47` — Two-tier AI evaluator + contrarian filter
-- `55dfcbd` — Security: scrub git history of leaked keys
 
 ## License
 Private repository.
