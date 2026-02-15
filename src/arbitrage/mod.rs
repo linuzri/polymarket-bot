@@ -30,6 +30,12 @@ const SNIPER_RESERVE_BUFFER: f64 = 1.0;
 /// Maximum days until resolution for sniper targets (focus on fast-resolving only)
 const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 30.0;
 
+// --- Hybrid take-profit constants ---
+/// Minimum bid price to trigger take-profit sell (99¢ = capture pre-resolution surge)
+const TAKE_PROFIT_MIN_BID: f64 = 0.99;
+/// Minimum position value to attempt sell (CLOB rounds tiny amounts to zero)
+const TAKE_PROFIT_MIN_VALUE: f64 = 1.0;
+
 // --- Multi-outcome arb constants ---
 /// Minimum profit % after buying all outcomes (must cover slippage + fees)
 const MULTI_ARB_MIN_PROFIT_PCT: f64 = 0.005; // 0.5% minimum
@@ -155,6 +161,9 @@ pub struct ArbScanner {
     multi_arb_trades: u64,
     multi_arb_profit: f64,
     arbed_events: std::collections::HashSet<String>, // avoid re-arbing same event
+    tp_sells: u64,
+    tp_profit: f64,
+    sold_positions: std::collections::HashSet<String>, // token_ids already sold
     cycle_count: u64,
     last_summary_cycle: u64,
 }
@@ -181,6 +190,9 @@ impl ArbScanner {
             multi_arb_trades: 0,
             multi_arb_profit: 0.0,
             arbed_events: std::collections::HashSet::new(),
+            tp_sells: 0,
+            tp_profit: 0.0,
+            sold_positions: std::collections::HashSet::new(),
             cycle_count: 0,
             last_summary_cycle: 0,
         }
@@ -876,6 +888,119 @@ impl ArbScanner {
         Ok(())
     }
 
+    /// Check open sniper positions for take-profit opportunity (hybrid: hold to resolution, but sell at 99¢+)
+    async fn check_take_profit(&mut self, client: &PolymarketClient) {
+        // Read portfolio state
+        let data = match std::fs::read_to_string("portfolio_state.json") {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let state: serde_json::Value = match serde_json::from_str(&data) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let positions = match state.get("positions").and_then(|p| p.as_object()) {
+            Some(p) => p,
+            None => return,
+        };
+
+        for (key, pos) in positions {
+            let avg_entry = pos.get("avg_entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let shares = pos.get("shares").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let cost_basis = pos.get("cost_basis").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let token_id = pos.get("token_id").and_then(|v| v.as_str()).unwrap_or("");
+            let question = pos.get("market_question").and_then(|v| v.as_str()).unwrap_or("?");
+            let neg_risk = pos.get("neg_risk").and_then(|v| v.as_bool()).unwrap_or(true);
+
+            // Only check sniper positions (entry > 0.90)
+            if avg_entry < 0.90 || shares < 1.0 || cost_basis < TAKE_PROFIT_MIN_VALUE {
+                continue;
+            }
+
+            // Skip already-sold positions
+            if self.sold_positions.contains(key) {
+                continue;
+            }
+
+            // Check current bid price (what we can sell at)
+            let book = match client.get_order_book(token_id).await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let best_bid = match book.bids.first() {
+                Some(b) => b.price,
+                None => continue,
+            };
+
+            if best_bid >= TAKE_PROFIT_MIN_BID {
+                let revenue = shares * best_bid;
+                let profit = revenue - cost_basis;
+                let profit_pct = profit / cost_basis * 100.0;
+
+                let ascii_q = question.chars()
+                    .map(|c| if c.is_ascii() { c } else { '?' })
+                    .collect::<String>();
+
+                println!("  >> TAKE-PROFIT: \"{}\" | {:.2} shares | entry ${:.3} -> bid ${:.3} | +${:.2} ({:.1}%)",
+                    truncate(&ascii_q, 40), shares, avg_entry, best_bid, profit, profit_pct);
+
+                if self.dry_run {
+                    println!("     (DRY RUN - not selling)");
+                    continue;
+                }
+
+                // Get tick size for this position
+                let condition_id = pos.get("condition_id").and_then(|v| v.as_str()).unwrap_or("");
+                let tick_size = if let Some(&ts) = self.tick_size_cache.get(condition_id) {
+                    ts
+                } else if !condition_id.is_empty() {
+                    let ts = client.get_tick_size(condition_id).await.unwrap_or(0.01);
+                    self.tick_size_cache.insert(condition_id.to_string(), ts);
+                    ts
+                } else {
+                    0.01
+                };
+
+                // Place limit sell at the bid price
+                match orders::place_order_with_tick(
+                    client,
+                    token_id,
+                    orders::Side::Sell,
+                    best_bid,
+                    shares,
+                    neg_risk,
+                    false,
+                    tick_size,
+                ).await {
+                    Ok(_) => {
+                        self.tp_sells += 1;
+                        self.tp_profit += profit;
+                        self.sold_positions.insert(key.clone());
+
+                        let msg = format!(
+                            "TAKE-PROFIT SELL\n\n{}\n{:.2} shares @ ${:.3} (entry ${:.3})\nRevenue: ${:.2}\nProfit: ${:.2} ({:.1}%)\nCapital freed: ${:.2}",
+                            truncate(&ascii_q, 45), shares, best_bid, avg_entry,
+                            revenue, profit, profit_pct, revenue
+                        );
+                        self.notifier.send(&msg).await;
+                        info!("Take-profit sell placed: {} shares @ ${:.3}", shares, best_bid);
+                    }
+                    Err(e) => {
+                        error!("Take-profit sell failed for {}: {}", truncate(&ascii_q, 30), e);
+                    }
+                }
+
+                // Rate limit
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+
+            // Rate limit order book checks
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
     /// Send hourly portfolio summary to Telegram
     async fn send_portfolio_summary(&self) {
         // Fetch open orders count via simple HTTP (no auth needed for portfolio file)
@@ -1035,6 +1160,12 @@ impl ArbScanner {
                 self.sniper_trades, self.sniper_committed, self.max_sniper_exposure, sniper_opps.len());
         }
 
+        // --- Hybrid take-profit: check sniper positions for 99¢+ sell opportunity ---
+        // Check every 5 cycles (~2.5 min)
+        if self.cycle_count % 5 == 0 {
+            self.check_take_profit(&client).await;
+        }
+
         // --- Multi-outcome arb: check events with 3+ outcomes ---
         // Only check every 10 cycles (~5 min) to reduce API load
         if self.cycle_count % 10 == 1 {
@@ -1097,8 +1228,10 @@ impl ArbScanner {
         println!("   Arb: min spread {:.1}% | max ${:.0}/side", MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE);
         println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K | max {:.0} days",
             SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0, SNIPER_MAX_DAYS_TO_RESOLVE);
-        println!("   Multi-arb: {}-{} outcomes | min {:.1}% profit | max ${:.0}\n",
+        println!("   Multi-arb: {}-{} outcomes | min {:.1}% profit | max ${:.0}",
             MULTI_ARB_MIN_OUTCOMES, MULTI_ARB_MAX_OUTCOMES, MULTI_ARB_MIN_PROFIT_PCT * 100.0, MULTI_ARB_MAX_SIZE);
+        println!("   Take-profit: sell sniper positions at {:.0}c+ (hybrid hold-to-resolution)\n",
+            TAKE_PROFIT_MIN_BID * 100.0);
 
         let startup_msg = format!(
             "Arb + Sniper + Multi-Arb Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, {:.0}d max\nMulti-arb: {}-{} outcomes, min {:.1}% profit, ${:.0} max",
