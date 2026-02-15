@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use tracing::{info, warn, error};
+use tracing::{info, warn, error, debug};
 
 use crate::api::client::PolymarketClient;
 use crate::notifications::TelegramNotifier;
@@ -29,6 +29,65 @@ const DEFAULT_MAX_SNIPER_EXPOSURE: f64 = 70.0;
 const SNIPER_RESERVE_BUFFER: f64 = 1.0;
 /// Maximum days until resolution for sniper targets (focus on fast-resolving only)
 const SNIPER_MAX_DAYS_TO_RESOLVE: f64 = 30.0;
+
+// --- Multi-outcome arb constants ---
+/// Minimum profit % after buying all outcomes (must cover slippage + fees)
+const MULTI_ARB_MIN_PROFIT_PCT: f64 = 0.005; // 0.5% minimum
+/// Maximum USD to invest per multi-outcome arb (total across all outcomes)
+const MULTI_ARB_MAX_SIZE: f64 = 25.0;
+/// Maximum number of outcomes to consider (too many = too much capital spread thin)
+const MULTI_ARB_MAX_OUTCOMES: usize = 30;
+/// Minimum outcomes for multi-arb (2-outcome is handled by regular arb)
+const MULTI_ARB_MIN_OUTCOMES: usize = 3;
+
+#[derive(Debug, Clone)]
+pub struct MultiOutcomeArb {
+    pub event_title: String,
+    pub event_slug: String,
+    pub outcomes: Vec<MultiOutcome>,
+    pub total_ask_sum: f64,     // sum of all YES asks
+    pub profit_pct: f64,        // (1.0 - total_ask_sum) / total_ask_sum
+    pub neg_risk: bool,
+    pub days_to_resolve: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MultiOutcome {
+    pub question: String,
+    pub condition_id: String,
+    pub token_id: String,       // YES token
+    pub ask_price: f64,         // best YES ask from order book
+    pub mid_price: f64,         // Gamma mid price
+}
+
+/// Raw Gamma API event (groups related markets)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GammaEvent {
+    title: Option<String>,
+    slug: Option<String>,
+    #[serde(default)]
+    markets: Vec<GammaEventMarket>,
+}
+
+/// Market within a Gamma event
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GammaEventMarket {
+    condition_id: Option<String>,
+    question: Option<String>,
+    outcome_prices: Option<String>,
+    clob_token_ids: Option<String>,
+    end_date_iso: Option<String>,
+    #[serde(default)]
+    active: Option<bool>,
+    #[serde(default)]
+    closed: Option<bool>,
+    #[serde(default)]
+    neg_risk: Option<bool>,
+    #[serde(default)]
+    volume: Option<serde_json::Value>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -93,6 +152,9 @@ pub struct ArbScanner {
     max_sniper_exposure: f64, // dynamic limit based on balance
     sniped_markets: std::collections::HashSet<String>, // avoid re-sniping same market
     tick_size_cache: std::collections::HashMap<String, f64>, // condition_id -> tick_size
+    multi_arb_trades: u64,
+    multi_arb_profit: f64,
+    arbed_events: std::collections::HashSet<String>, // avoid re-arbing same event
     cycle_count: u64,
     last_summary_cycle: u64,
 }
@@ -116,6 +178,9 @@ impl ArbScanner {
             max_sniper_exposure: DEFAULT_MAX_SNIPER_EXPOSURE,
             sniped_markets: std::collections::HashSet::new(),
             tick_size_cache: std::collections::HashMap::new(),
+            multi_arb_trades: 0,
+            multi_arb_profit: 0.0,
+            arbed_events: std::collections::HashSet::new(),
             cycle_count: 0,
             last_summary_cycle: 0,
         }
@@ -569,6 +634,248 @@ impl ArbScanner {
         Ok(())
     }
 
+    /// Fetch multi-outcome events from Gamma API
+    async fn fetch_events(&self) -> Result<Vec<GammaEvent>> {
+        let cutoff = (chrono::Utc::now() + chrono::Duration::days(SNIPER_MAX_DAYS_TO_RESOLVE as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let url = format!(
+            "{}/events?closed=false&active=true&order=volume&ascending=false&limit=50",
+            self.gamma_url
+        );
+
+        let events: Vec<GammaEvent> = self.http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch events")?
+            .json()
+            .await
+            .context("Failed to parse events")?;
+
+        // Filter to events with right number of outcomes
+        let filtered: Vec<GammaEvent> = events.into_iter()
+            .filter(|e| {
+                let n = e.markets.len();
+                n >= MULTI_ARB_MIN_OUTCOMES && n <= MULTI_ARB_MAX_OUTCOMES
+            })
+            .collect();
+
+        debug!("Fetched {} multi-outcome events ({}-{} outcomes)", filtered.len(), MULTI_ARB_MIN_OUTCOMES, MULTI_ARB_MAX_OUTCOMES);
+        Ok(filtered)
+    }
+
+    /// Check a multi-outcome event for arb (sum of all YES asks < $1.00)
+    async fn check_multi_outcome_arb(&self, client: &PolymarketClient, event: &GammaEvent) -> Option<MultiOutcomeArb> {
+        let title = event.title.as_deref()?;
+        let slug = event.slug.as_deref()?;
+
+        // Skip already-arbed events
+        if self.arbed_events.contains(slug) {
+            return None;
+        }
+
+        // All markets must be neg_risk and active
+        let active_markets: Vec<&GammaEventMarket> = event.markets.iter()
+            .filter(|m| {
+                m.active.unwrap_or(true) && !m.closed.unwrap_or(false)
+                && m.condition_id.is_some() && m.clob_token_ids.is_some()
+            })
+            .collect();
+
+        if active_markets.len() < MULTI_ARB_MIN_OUTCOMES {
+            return None;
+        }
+
+        // Check if neg_risk (required for multi-outcome guarantee)
+        let is_neg_risk = active_markets.iter().any(|m| m.neg_risk.unwrap_or(false));
+        if !is_neg_risk {
+            debug!("Skipping non-neg_risk event: {}", title);
+            return None;
+        }
+
+        // Estimate resolution time
+        let first_end = active_markets.iter()
+            .find_map(|m| m.end_date_iso.as_deref());
+        let first_q = active_markets.first()
+            .and_then(|m| m.question.as_deref())
+            .unwrap_or(title);
+        let days = Self::estimate_resolution_days(first_end, first_q);
+        if days > SNIPER_MAX_DAYS_TO_RESOLVE {
+            return None;
+        }
+
+        // Quick pre-check with mid prices first (avoid order book calls if no chance)
+        let mut mid_sum = 0.0;
+        for m in &active_markets {
+            let prices: Vec<f64> = m.outcome_prices
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                .map(|v| v.iter().filter_map(|p| p.parse::<f64>().ok()).collect())
+                .unwrap_or_default();
+            if prices.is_empty() { return None; }
+            mid_sum += prices[0]; // YES price
+        }
+
+        // Only check order books if mid-price sum < 1.02 (some hope of arb)
+        if mid_sum >= 1.02 {
+            return None;
+        }
+
+        // Fetch actual order books for each YES token
+        let mut outcomes = Vec::new();
+        let mut total_ask = 0.0;
+
+        for m in &active_markets {
+            let cid = m.condition_id.as_deref()?;
+            let tokens: Vec<String> = m.clob_token_ids
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())?;
+            if tokens.is_empty() { return None; }
+
+            let yes_token = &tokens[0];
+            let book = match client.get_order_book(yes_token).await {
+                Ok(b) => b,
+                Err(_) => return None,
+            };
+
+            let ask_price = match book.asks.first() {
+                Some(a) => a.price,
+                None => return None, // No sellers = can't buy this outcome
+            };
+
+            let mid_prices: Vec<f64> = m.outcome_prices
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                .map(|v| v.iter().filter_map(|p| p.parse::<f64>().ok()).collect())
+                .unwrap_or_default();
+
+            outcomes.push(MultiOutcome {
+                question: m.question.as_deref().unwrap_or("?").to_string(),
+                condition_id: cid.to_string(),
+                token_id: yes_token.clone(),
+                ask_price,
+                mid_price: mid_prices.first().copied().unwrap_or(0.0),
+            });
+
+            total_ask += ask_price;
+
+            // Rate limit
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+
+        let profit_pct = (1.0 - total_ask) / total_ask;
+
+        if profit_pct >= MULTI_ARB_MIN_PROFIT_PCT {
+            Some(MultiOutcomeArb {
+                event_title: title.to_string(),
+                event_slug: slug.to_string(),
+                outcomes,
+                total_ask_sum: total_ask,
+                profit_pct,
+                neg_risk: is_neg_risk,
+                days_to_resolve: days,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Execute multi-outcome arb: buy YES on all outcomes
+    async fn execute_multi_outcome_arb(&mut self, arb: &MultiOutcomeArb) -> Result<()> {
+        let n = arb.outcomes.len();
+        // Budget per outcome = total budget / n outcomes
+        let budget_per = MULTI_ARB_MAX_SIZE / n as f64;
+
+        // Calculate shares: buy equal $ amount of each outcome
+        // All shares pay $1.00 on resolution, one outcome wins
+        let min_shares = arb.outcomes.iter()
+            .map(|o| {
+                let s = budget_per / o.ask_price;
+                (s * 100.0).floor() / 100.0 // round down to 2 decimals
+            })
+            .fold(f64::MAX, f64::min);
+
+        if min_shares < 1.0 {
+            warn!("Multi-arb shares too small: {:.2}", min_shares);
+            return Ok(());
+        }
+
+        // Use equal shares across all outcomes for clean arb
+        let shares = min_shares;
+        let total_cost: f64 = arb.outcomes.iter().map(|o| shares * o.ask_price).sum();
+        let payout = shares; // $1.00 per share on resolution
+        let profit = payout - total_cost;
+
+        let ascii_title = arb.event_title.chars()
+            .map(|c| if c.is_ascii() { c } else { '?' })
+            .collect::<String>();
+
+        println!("  >> MULTI-ARB: \"{}\" | {} outcomes", truncate(&ascii_title, 45), n);
+        println!("     Buy {:.2} shares of each YES @ total ${:.2}", shares, total_cost);
+        println!("     Payout: ${:.2} | Profit: ${:.2} ({:.2}%)", payout, profit, arb.profit_pct * 100.0);
+
+        if self.dry_run {
+            println!("     (DRY RUN - not executing)\n");
+            return Ok(());
+        }
+
+        let client = PolymarketClient::new()?;
+        let mut orders_placed = 0;
+
+        for (i, outcome) in arb.outcomes.iter().enumerate() {
+            let cost = shares * outcome.ask_price;
+            let ascii_q = outcome.question.chars()
+                .map(|c| if c.is_ascii() { c } else { '?' })
+                .collect::<String>();
+            println!("     [{}/{}] BUY {:.2} YES @ ${:.4} = ${:.2} | {}",
+                i+1, n, shares, outcome.ask_price, cost, truncate(&ascii_q, 35));
+
+            match orders::place_order(
+                &client,
+                &outcome.token_id,
+                orders::Side::Buy,
+                outcome.ask_price,
+                shares,
+                arb.neg_risk,
+                false,
+            ).await {
+                Ok(_) => {
+                    orders_placed += 1;
+                    info!("Multi-arb order {}/{} placed: {}", i+1, n, truncate(&ascii_q, 40));
+                }
+                Err(e) => {
+                    error!("Multi-arb order {}/{} FAILED: {} - {}", i+1, n, truncate(&ascii_q, 30), e);
+                    // Alert and abort remaining orders
+                    let msg = format!(
+                        "MULTI-ARB PARTIAL FAILURE\n\nEvent: {}\nPlaced: {}/{} orders\nFailed at: {}\nError: {}\n\nWARNING: Partial orders placed - manual review needed!",
+                        truncate(&ascii_title, 40), orders_placed, n, truncate(&ascii_q, 30), e
+                    );
+                    self.notifier.send(&msg).await;
+                    return Err(e);
+                }
+            }
+
+            // Delay between orders
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+
+        self.multi_arb_trades += 1;
+        self.multi_arb_profit += profit;
+        self.arbed_events.insert(arb.event_slug.clone());
+
+        // Notify
+        let msg = format!(
+            "MULTI-OUTCOME ARB EXECUTED\n\nEvent: {}\nOutcomes: {}\nShares: {:.2} each\nTotal cost: ${:.2}\nGuaranteed payout: ${:.2}\nProfit: ${:.2} ({:.2}%)\nResolves in: ~{:.0} days",
+            truncate(&ascii_title, 40), n, shares, total_cost, payout, profit,
+            arb.profit_pct * 100.0, arb.days_to_resolve
+        );
+        self.notifier.send(&msg).await;
+
+        Ok(())
+    }
+
     /// Send hourly portfolio summary to Telegram
     async fn send_portfolio_summary(&self) {
         // Fetch open orders count via simple HTTP (no auth needed for portfolio file)
@@ -728,6 +1035,51 @@ impl ArbScanner {
                 self.sniper_trades, self.sniper_committed, self.max_sniper_exposure, sniper_opps.len());
         }
 
+        // --- Multi-outcome arb: check events with 3+ outcomes ---
+        // Only check every 10 cycles (~5 min) to reduce API load
+        if self.cycle_count % 10 == 1 {
+            match self.fetch_events().await {
+                Ok(events) => {
+                    if !events.is_empty() {
+                        println!("  Checking {} multi-outcome events for arb...", events.len());
+                        let mut multi_arbs = Vec::new();
+                        for event in &events {
+                            if let Some(arb) = self.check_multi_outcome_arb(&client, event).await {
+                                let ascii_title = arb.event_title.chars()
+                                    .map(|c| if c.is_ascii() { c } else { '?' })
+                                    .collect::<String>();
+                                println!(
+                                    "  >> MULTI-ARB: \"{}\" | {} outcomes | sum ${:.4} | +{:.2}% | {:.0}d",
+                                    truncate(&ascii_title, 40),
+                                    arb.outcomes.len(), arb.total_ask_sum,
+                                    arb.profit_pct * 100.0, arb.days_to_resolve
+                                );
+                                multi_arbs.push(arb);
+                            }
+                        }
+
+                        // Sort by profit % descending
+                        multi_arbs.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap());
+
+                        // Execute best multi-arb
+                        for arb in multi_arbs.iter().take(1) {
+                            if let Err(e) = self.execute_multi_outcome_arb(arb).await {
+                                error!("Multi-outcome arb failed: {}", e);
+                            }
+                        }
+
+                        if !multi_arbs.is_empty() {
+                            println!("  Multi-arb: {} opportunities found, {} executed total",
+                                multi_arbs.len(), self.multi_arb_trades);
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to fetch events: {}", e);
+                }
+            }
+        }
+
         // Hourly portfolio summary (~120 cycles at 30s = 1 hour)
         if self.cycle_count - self.last_summary_cycle >= 120 {
             self.last_summary_cycle = self.cycle_count;
@@ -743,13 +1095,16 @@ impl ArbScanner {
         println!("\n== Polymarket Arb + Sniper Scanner - {} ==", mode);
         println!("   Scan interval: {}s", SCAN_INTERVAL_SECS);
         println!("   Arb: min spread {:.1}% | max ${:.0}/side", MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE);
-        println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K | max {:.0} days\n",
+        println!("   Sniper: buy {:.0}-{:.0}% certainty | max ${:.0} | min vol ${:.0}K | max {:.0} days",
             SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0, SNIPER_MAX_DAYS_TO_RESOLVE);
+        println!("   Multi-arb: {}-{} outcomes | min {:.1}% profit | max ${:.0}\n",
+            MULTI_ARB_MIN_OUTCOMES, MULTI_ARB_MAX_OUTCOMES, MULTI_ARB_MIN_PROFIT_PCT * 100.0, MULTI_ARB_MAX_SIZE);
 
         let startup_msg = format!(
-            "Arb + Sniper Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, ${:.0}K min vol, {:.0}d max",
+            "Arb + Sniper + Multi-Arb Scanner Started ({})\nInterval: {}s\nArb: min {:.1}% spread, ${:.0}/side\nSniper: buy {:.0}-{:.0}% certainty, ${:.0} max, {:.0}d max\nMulti-arb: {}-{} outcomes, min {:.1}% profit, ${:.0} max",
             mode, SCAN_INTERVAL_SECS, MIN_PROFIT_PCT * 100.0, MAX_ARB_SIZE,
-            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MIN_VOLUME / 1000.0, SNIPER_MAX_DAYS_TO_RESOLVE
+            SNIPER_MIN_PRICE * 100.0, SNIPER_MAX_PRICE * 100.0, SNIPER_MAX_SIZE, SNIPER_MAX_DAYS_TO_RESOLVE,
+            MULTI_ARB_MIN_OUTCOMES, MULTI_ARB_MAX_OUTCOMES, MULTI_ARB_MIN_PROFIT_PCT * 100.0, MULTI_ARB_MAX_SIZE
         );
         self.notifier.send(&startup_msg).await;
 
