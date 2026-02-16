@@ -124,6 +124,30 @@ impl WeatherStrategy {
                     continue;
                 }
 
+                // Forecast buffer check: skip bets where forecast is too close to bucket threshold.
+                // A 1-2° shift in forecast can flip the outcome — avoid borderline bets.
+                let buffer = match market.unit {
+                    super::TempUnit::Fahrenheit => self.config.forecast_buffer_f,
+                    super::TempUnit::Celsius => self.config.forecast_buffer_c,
+                };
+                let forecast_temp = forecast.high_temp;
+                let near_threshold = if bucket.temp_bucket.max_temp.is_finite() {
+                    // "X or lower" bucket — forecast must be well below max
+                    (forecast_temp - bucket.temp_bucket.max_temp).abs() < buffer
+                } else if bucket.temp_bucket.min_temp.is_finite() {
+                    // "X or higher" bucket — forecast must be well above min
+                    (forecast_temp - bucket.temp_bucket.min_temp).abs() < buffer
+                } else {
+                    false
+                };
+                if near_threshold {
+                    debug!(
+                        "BUFFER SKIP: {} | forecast={:.1} too close to bucket threshold (buffer={:.1})",
+                        bucket.label, forecast_temp, buffer
+                    );
+                    continue;
+                }
+
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
 

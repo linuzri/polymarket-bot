@@ -29,10 +29,13 @@ poll_interval = 30
 [weather]
 enabled = true
 scan_interval_secs = 1800
-min_edge = 0.10
+min_edge = 0.15
 max_per_bucket = 20.0
 max_total_exposure = 100.0
 kelly_fraction = 0.40
+# Minimum degrees between forecast and bucket threshold to avoid borderline bets
+forecast_buffer_f = 3.0   # °F for US cities
+forecast_buffer_c = 2.0   # °C for international cities
 cities_us = ["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
 cities_intl = ["london", "seoul", "paris", "toronto", "buenos-aires", "ankara", "wellington"]
 

@@ -104,13 +104,15 @@ impl OpenMeteoClient {
             // Open-Meteo returns °C by default; convert if city needs °F
             let (high_temp, std_dev) = match unit {
                 TempUnit::Celsius => {
-                    // σ ≈ 1.5°C for day 1, growing ~0.8°C per day
-                    (temp, 1.5 + (days_ahead - 1.0) * 0.8)
+                    // σ ≈ 2.0°C for day 1, growing ~1.0°C per day
+                    // Increased from 1.5+0.8x after Seoul 7°C miss (2.7°C shift)
+                    (temp, 2.0 + (days_ahead - 1.0) * 1.0)
                 }
                 TempUnit::Fahrenheit => {
                     // If data is in °C, convert; σ in °F
+                    // Increased from 2.5+1.5x to match NOAA adjustments
                     let temp_f = super::c_to_f(temp);
-                    (temp_f, 2.5 + (days_ahead - 1.0) * 1.5)
+                    (temp_f, 3.5 + (days_ahead - 1.0) * 2.0)
                 }
             };
 

@@ -25,6 +25,13 @@ pub struct WeatherConfig {
     pub cities_us: Vec<String>,
     #[serde(default = "default_cities_intl")]
     pub cities_intl: Vec<String>,
+    /// Minimum degrees between forecast and bucket threshold to place a bet.
+    /// Prevents borderline bets where a 1-2° forecast shift kills the position.
+    /// In °F for US cities, °C for international cities.
+    #[serde(default = "default_forecast_buffer")]
+    pub forecast_buffer_f: f64,
+    #[serde(default = "default_forecast_buffer_c")]
+    pub forecast_buffer_c: f64,
 }
 
 impl Default for WeatherConfig {
@@ -38,6 +45,8 @@ impl Default for WeatherConfig {
             kelly_fraction: 0.25,
             cities_us: default_cities_us(),
             cities_intl: default_cities_intl(),
+            forecast_buffer_f: 3.0,
+            forecast_buffer_c: 2.0,
         }
     }
 }
@@ -52,6 +61,8 @@ fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()
 }
+fn default_forecast_buffer() -> f64 { 3.0 }
+fn default_forecast_buffer_c() -> f64 { 2.0 }
 fn default_cities_intl() -> Vec<String> {
     vec!["london", "seoul", "paris", "toronto"]
         .into_iter().map(String::from).collect()

@@ -107,8 +107,9 @@ impl NoaaClient {
 
             // Estimate days ahead for std_dev calculation
             let days_ahead = results.len() as f64 + 1.0;
-            // Typical NOAA forecast error: ~2-3°F for day 1, ~4-5°F for day 2, grows with time
-            let std_dev = 2.0 + (days_ahead - 1.0) * 1.5;
+            // NOAA forecast error: ~3-4°F for day 1, ~5-7°F for day 2+
+            // Increased from 2.0+1.5x after Miami 81°F miss (1.5°F shift killed position)
+            let std_dev = 3.5 + (days_ahead - 1.0) * 2.0;
 
             results.push(CityForecast {
                 city: city.name.clone(),
