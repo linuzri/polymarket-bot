@@ -52,3 +52,6 @@ thiserror = "2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+
+# Statistics (normal distribution for weather strategy)
+statrs = "0.17"

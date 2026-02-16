@@ -24,6 +24,13 @@ polymarket-arb (PM2 id:13)
 │   ├── Duplicate tracking (by condition_id)
 │   └── Score: profit_pct / days_to_resolve
 ├── Hybrid Take-Profit — sell sniper positions at 99¢+ bid
+├── Weather Arbitrage — temperature forecast vs market price edge detection
+│   ├── NOAA forecasts for US cities (NYC, Chicago, Miami, Atlanta, Seattle, Dallas)
+│   ├── Open-Meteo ensemble forecasts for international cities (London, Seoul, Paris, Toronto)
+│   ├── Normal distribution probability model with forecast uncertainty
+│   ├── Kelly criterion position sizing (fractional, 25% default)
+│   ├── Min 15% edge threshold, max $10/bucket, $50 total exposure
+│   └── Automatic weather market discovery from Gamma API
 └── Hourly Portfolio Summary → Telegram
 ```
 
@@ -65,6 +72,42 @@ The Anjun-inspired strategy:
 - **Black swan risk** — tiny chance the "impossible" happens
 - **Capital lockup** — mitigated by 30-day max + hybrid take-profit at 99c+
 - **Best at scale** — Anjun made $1M with $200K positions; at $92, returns are pennies
+
+## Weather Strategy
+
+Exploits mispriced temperature buckets on Polymarket weather markets by comparing forecast probabilities against market prices.
+
+### How it works
+1. **Discover** weather markets from Gamma API (tag "weather", question contains "temperature")
+2. **Fetch forecasts** — NOAA (US cities) and Open-Meteo ensemble (international cities)
+3. **Build probability distribution** — Normal distribution centered on forecast high, σ based on forecast horizon (2-3°F day-1, 4-5°F day-2)
+4. **Compare** our probability vs market price for each temperature bucket
+5. **Trade** when edge ≥ 15% — Kelly criterion sizing, max $10/bucket, $50 total exposure
+
+### Run
+```bash
+# Weather strategy (standalone, loops every 30 min)
+./target/release/polymarket-bot weather
+
+# Single scan (no loop)
+./target/release/polymarket-bot weather --once
+
+# Dry run
+./target/release/polymarket-bot weather --dry-run
+```
+
+### Config (config.toml)
+```toml
+[weather]
+enabled = true
+scan_interval_secs = 1800
+min_edge = 0.15
+max_per_bucket = 10.0
+max_total_exposure = 50.0
+kelly_fraction = 0.25
+cities_us = ["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
+cities_intl = ["london", "seoul", "paris", "toronto"]
+```
 
 ## Quick Start
 

@@ -38,7 +38,14 @@ polymarket-bot/
 │   │   └── config.rs       # Strategy config
 │   ├── btc5min/
 │   │   └── mod.rs          # BTC 5-min markets (DISABLED - 17% WR)
-│   └── main.rs             # CLI: run, arb, portfolio, paper
+│   ├── weather/            # Weather arbitrage strategy
+│   │   ├── mod.rs          # Module defs, city configs, WeatherConfig, TempUnit
+│   │   ├── noaa.rs         # NOAA API client (api.weather.gov) for US cities
+│   │   ├── open_meteo.rs   # Open-Meteo ensemble forecasts for international cities
+│   │   ├── forecast.rs     # Normal distribution probability calculation per bucket
+│   │   ├── markets.rs      # Gamma API weather market discovery + temp bucket parsing
+│   │   └── strategy.rs     # Edge detection, Kelly sizing, trade execution, logging
+│   └── main.rs             # CLI: run, arb, weather, portfolio, paper
 ├── ecosystem.config.js     # PM2: polymarket-arb (active), polymarket-bot (stopped)
 ├── strategy_config.json    # AI strategy config (when enabled)
 ├── portfolio_state.json    # Persisted portfolio state

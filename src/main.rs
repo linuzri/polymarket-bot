@@ -9,6 +9,7 @@ mod paper;
 mod portfolio;
 mod strategy;
 mod signals;
+mod weather;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -100,6 +101,15 @@ enum Commands {
         /// Force dry run (no real trades)
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Run the weather arbitrage strategy
+    Weather {
+        /// Force dry run (no real trades)
+        #[arg(long)]
+        dry_run: bool,
+        /// Run once (don't loop)
+        #[arg(long)]
+        once: bool,
     },
 }
 
@@ -339,6 +349,15 @@ async fn main() -> Result<()> {
         Commands::Arb { dry_run } => {
             let mut scanner = arbitrage::ArbScanner::new(dry_run);
             scanner.run().await?;
+        }
+        Commands::Weather { dry_run, once } => {
+            let weather_config = weather::WeatherConfig::default();
+            let mut strategy = weather::strategy::WeatherStrategy::new(weather_config, dry_run);
+            if once {
+                strategy.run_once().await?;
+            } else {
+                strategy.run_loop().await?;
+            }
         }
         Commands::Portfolio => {
             let mut state = portfolio::PortfolioState::load()?;

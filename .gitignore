@@ -8,3 +8,7 @@ check_*.py
 scripts/check_*.py
 scripts/find_*.py
 scripts/test_*.py
+cargo_rel_err.txt 
+weather_err.txt 
+weather_out.txt 
+reconciliation_data.json 
