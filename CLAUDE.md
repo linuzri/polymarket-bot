@@ -4,12 +4,18 @@
 Automated Polymarket prediction market trading bot built in Rust. **Pivoted to weather arbitrage strategy** — using NOAA + Open-Meteo forecasts to find mispriced temperature markets and placing limit orders at fair value.
 
 ## Current Status (Feb 16, 2026)
-- **Balance:** ~$26.56 USDC cash + ~$66 in Fed positions (legacy, letting resolve)
+- **Balance:** ~$26.56 USDC cash + ~$86 in positions (2 Fed + 2 weather)
 - **Strategy:** 100% WEATHER FOCUS — all other strategies on backlog
 - **Process:** Weather runs via OpenClaw cron every 3 hours (`weather --once`)
+- **Dashboard sync:** `scripts/sync_dashboard.py` runs every 3h via cron → pushes to Supabase
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
 - **polymarket-bot:** STOPPED (AI strategy paused)
 - **Telegram:** Trade alerts on weather orders
+
+### Recent Changes (Feb 16)
+- **Weather hardening** (commit `5c39318`): Forecast buffer (3°F/2°C), higher std_dev, min_edge 15%
+- **Dashboard sync script** added: `scripts/sync_dashboard.py` — fetches live prices, updates Supabase
+- Miami/Seoul bets lost due to borderline forecasts — hardening prevents future borderline bets
 
 ## Strategy: Weather Arbitrage (ACTIVE — Primary Focus)
 - Scans 26+ weather markets across 13 cities (today + tomorrow)
@@ -18,7 +24,7 @@ Automated Polymarket prediction market trading bot built in Rust. **Pivoted to w
 - Places LIMIT BUY orders at 85% of fair value (maker, not taker)
 - Zero maker fees on Polymarket
 - Kelly criterion sizing: 40% fraction, $20 max/bucket, $100 total exposure
-- Min edge: 10%
+- Min edge: 15% (raised from 10% after Miami/Seoul losses)
 - Resolution: 1-2 days (fast capital recycling)
 - Cron: every 3 hours via OpenClaw
 
@@ -26,7 +32,11 @@ Automated Polymarket prediction market trading bot built in Rust. **Pivoted to w
 - Informational edge: weather forecasts are reliable (not just sentiment)
 - Wide bid-ask spreads = mispricing opportunities
 - Fast resolution = quick compounding
-- 351% potential ROI on first trades ($5.20 risk → $23.43 if both win)
+
+### Forecast Buffer (Added Feb 16)
+- Skip bets where forecast is within 3°F (US) / 2°C (intl) of bucket threshold
+- Prevents borderline bets killed by small forecast shifts
+- Higher std_dev: NOAA 3.5+2.0x/day, Open-Meteo 2.0+1.0x/day (°C)
 
 ### Cities
 - **US (°F):** NYC, Chicago, Miami, Atlanta, Seattle, Dallas (NOAA)

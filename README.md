@@ -4,12 +4,14 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 
 ## 🔴 Live Trading Status
 
-- **Balance:** ~$26.56 USDC + ~$66 in legacy positions
+- **Balance:** ~$26.56 USDC + ~$86 in positions (2 Fed legacy + 2 weather)
 - **Initial Deposit:** $100.27
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
 - **Scan Frequency:** Every 3 hours (OpenClaw cron)
+- **Dashboard Sync:** Every 3h → Supabase → [Live Dashboard](https://trade-bot-hq.vercel.app)
 - **Cities:** 13 (6 US + 7 international)
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
+- **Hardening (Feb 16):** Forecast buffer (3°F/2°C), higher uncertainty, 15% min edge
 
 ## How It Works
 
@@ -18,7 +20,7 @@ Every 3 hours:
 1. Discover weather markets → 26+ markets across 13 cities (today + tomorrow)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (international)
 3. Calculate probabilities → Normal distribution per temperature bucket
-4. Find edges → Our probability vs market mid-price (min 10% edge)
+4. Find edges → Our probability vs market price (min 15% edge + forecast buffer)
 5. Size positions → Kelly criterion (40% fraction, $20 max per bucket)
 6. Place limit orders → BUY YES at 85% of fair value (maker, zero fees)
 7. Wait for fills → Orders sit until someone takes the other side
