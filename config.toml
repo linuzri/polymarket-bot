@@ -29,10 +29,10 @@ poll_interval = 30
 [weather]
 enabled = true
 scan_interval_secs = 1800
-min_edge = 0.12
-max_per_bucket = 15.0
-max_total_exposure = 75.0
-kelly_fraction = 0.35
+min_edge = 0.10
+max_per_bucket = 20.0
+max_total_exposure = 100.0
+kelly_fraction = 0.40
 cities_us = ["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
 cities_intl = ["london", "seoul", "paris", "toronto", "buenos-aires", "ankara", "wellington"]
 
