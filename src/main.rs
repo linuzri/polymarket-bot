@@ -351,7 +351,22 @@ async fn main() -> Result<()> {
             scanner.run().await?;
         }
         Commands::Weather { dry_run, once } => {
-            let weather_config = weather::WeatherConfig::default();
+            // Load weather config from config.toml [weather] section
+            #[derive(serde::Deserialize, Default)]
+            struct FullConfig {
+                #[serde(default)]
+                weather: weather::WeatherConfig,
+            }
+            let weather_config = match std::fs::read_to_string("config.toml") {
+                Ok(toml_str) => {
+                    toml::from_str::<FullConfig>(&toml_str)
+                        .map(|c| c.weather)
+                        .unwrap_or_default()
+                }
+                Err(_) => weather::WeatherConfig::default(),
+            };
+            println!("Weather config: max_per_bucket=${:.0}, max_total_exposure=${:.0}, kelly={:.0}%",
+                weather_config.max_per_bucket, weather_config.max_total_exposure, weather_config.kelly_fraction * 100.0);
             let mut strategy = weather::strategy::WeatherStrategy::new(weather_config, dry_run);
             if once {
                 strategy.run_once().await?;

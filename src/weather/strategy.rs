@@ -45,6 +45,12 @@ pub struct WeatherStrategy {
 
 impl WeatherStrategy {
     pub fn new(config: WeatherConfig, dry_run: bool) -> Self {
+        // Load existing unresolved exposure from trade log
+        let existing_exposure = Self::load_existing_exposure();
+        if existing_exposure > 0.0 {
+            info!("Loaded existing weather exposure: ${:.2}", existing_exposure);
+        }
+
         Self {
             config,
             noaa: NoaaClient::new(),
@@ -56,9 +62,36 @@ impl WeatherStrategy {
                 .build()
                 .unwrap(),
             dry_run,
-            total_exposure: 0.0,
+            total_exposure: existing_exposure,
             trades: Vec::new(),
         }
+    }
+
+    /// Load existing unresolved exposure from strategy_trades.json
+    /// Only counts non-dry-run trades from today or future dates (not yet resolved)
+    fn load_existing_exposure() -> f64 {
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return 0.0,
+        };
+
+        trades.iter()
+            .filter(|t| !t.dry_run)
+            .filter(|t| {
+                // Extract date from market_question (e.g. "...on February 21?")
+                // Or use timestamp — trades from today or later are potentially unresolved
+                // Simple heuristic: trades from last 3 days could still be open
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
+                    let trade_date = ts.format("%Y-%m-%d").to_string();
+                    let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
+                    days_ago <= 2 // trades from last 2 days could be unresolved
+                } else {
+                    false
+                }
+            })
+            .map(|t| t.cost)
+            .sum()
     }
 
     /// Run a single scan cycle

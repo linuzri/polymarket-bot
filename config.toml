@@ -31,7 +31,7 @@ enabled = true
 scan_interval_secs = 1800
 min_edge = 0.15
 max_per_bucket = 20.0
-max_total_exposure = 100.0
+max_total_exposure = 20.0   # Limit to 1 position at a time (matches max_per_bucket)
 kelly_fraction = 0.40
 # Minimum degrees between forecast and bucket threshold to avoid borderline bets
 forecast_buffer_f = 3.0   # °F for US cities
