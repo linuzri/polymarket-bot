@@ -316,29 +316,55 @@ impl WeatherStrategy {
         let mut all_forecasts = Vec::new();
 
         for city in cities {
-            let forecasts = match city.unit {
-                TempUnit::Fahrenheit => {
-                    // US cities: use NOAA
-                    match self.noaa.fetch_forecast(city).await {
-                        Ok(f) => f,
-                        Err(e) => {
-                            warn!("NOAA forecast failed for {}: {}, trying Open-Meteo", city.name, e);
-                            // Fallback to Open-Meteo
-                            self.open_meteo.fetch_forecast(city).await.unwrap_or_default()
-                        }
-                    }
-                }
-                TempUnit::Celsius => {
-                    // International cities: use Open-Meteo
-                    match self.open_meteo.fetch_forecast(city).await {
-                        Ok(f) => f,
-                        Err(e) => {
-                            warn!("Open-Meteo forecast failed for {}: {}", city.name, e);
-                            Vec::new()
-                        }
-                    }
+            let mut forecasts = match self.open_meteo.fetch_forecast(city).await {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!("Open-Meteo forecast failed for {}: {}", city.name, e);
+                    Vec::new()
                 }
             };
+
+            // US cities: also fetch NOAA and merge as 5th model
+            if city.unit == TempUnit::Fahrenheit {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                match self.noaa.fetch_forecast(city).await {
+                    Ok(noaa_forecasts) => {
+                        // Merge NOAA temps into Open-Meteo forecasts by date
+                        let noaa_by_date: HashMap<String, f64> = noaa_forecasts
+                            .into_iter()
+                            .map(|f| (f.date.clone(), f.high_temp))
+                            .collect();
+
+                        for i in 0..forecasts.len() {
+                            let date = forecasts[i].date.clone();
+                            if let Some(&noaa_temp) = noaa_by_date.get(&date) {
+                                // Apply +1.0F warm bias to match Open-Meteo bias
+                                let biased_temp = noaa_temp + 1.0;
+                                forecasts[i].model_temps.insert("noaa".to_string(), biased_temp);
+
+                                // Recalculate mean with NOAA included
+                                let temps: Vec<f64> = forecasts[i].model_temps.values().cloned().collect();
+                                forecasts[i].high_temp = temps.iter().sum::<f64>() / temps.len() as f64;
+
+                                // Recalculate spread-based std_dev
+                                let spread = temps.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                                           - temps.iter().cloned().fold(f64::INFINITY, f64::min);
+                                let days_ahead = i as f64 + 1.0;
+                                forecasts[i].std_dev = (spread * 0.8).max(2.5) + (days_ahead - 1.0) * 1.0;
+
+                                info!(
+                                    "  {} {} | +NOAA={:.1}F | {} models | mean={:.1}",
+                                    city.name, date, biased_temp,
+                                    forecasts[i].model_temps.len(), forecasts[i].high_temp
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("NOAA forecast failed for {}: {} (continuing with Open-Meteo only)", city.name, e);
+                    }
+                }
+            }
 
             all_forecasts.extend(forecasts);
 
