@@ -27,6 +27,7 @@ Automated Polymarket prediction market trading bot built in Rust. **Pivoted to w
 - Min edge: 15% (raised from 10% after Miami/Seoul losses)
 - Resolution: 1-2 days (fast capital recycling)
 - Cron: every 3 hours via OpenClaw
+- **Multi-source verification:** `weather_multi_source.py` cross-checks 4 Open-Meteo models (best_match, gfs_seamless, icon_seamless, ecmwf_ifs025) with station bias correction. Only flags trades when 3+/4 models agree on the same bucket. Run with `python weather_multi_source.py --date YYYY-MM-DD`
 
 ### Why Weather Works
 - Informational edge: weather forecasts are reliable (not just sentiment)

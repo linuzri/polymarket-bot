@@ -190,6 +190,19 @@ impl WeatherStrategy {
                         market.question, bucket.label, our_prob, market_price, edge
                     );
 
+                    // Log per-model temperatures if available
+                    if !forecast.model_temps.is_empty() {
+                        let mut model_strs: Vec<String> = forecast.model_temps.iter()
+                            .map(|(m, t)| format!("{}={:.1}", m, t))
+                            .collect();
+                        model_strs.sort();
+                        let n_models = forecast.model_temps.len();
+                        let spread = forecast.model_temps.values().cloned().fold(f64::NEG_INFINITY, f64::max)
+                                   - forecast.model_temps.values().cloned().fold(f64::INFINITY, f64::min);
+                        println!("     Models ({}/{}): {} | spread={:.1}",
+                            n_models, n_models, model_strs.join(", "), spread);
+                    }
+
                     // Kelly criterion position sizing
                     let kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
                     if kelly_size < 0.50 {

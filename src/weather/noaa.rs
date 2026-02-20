@@ -117,6 +117,7 @@ impl NoaaClient {
                 high_temp: temp,
                 unit,
                 std_dev,
+                model_temps: std::collections::HashMap::new(),
             });
 
             // Only need first few days

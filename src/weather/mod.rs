@@ -4,6 +4,7 @@ pub mod forecast;
 pub mod markets;
 pub mod strategy;
 
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Weather configuration loaded from config.toml
@@ -143,6 +144,8 @@ pub struct CityForecast {
     pub unit: TempUnit,
     /// Standard deviation of forecast uncertainty
     pub std_dev: f64,
+    /// Per-model temperatures (e.g. "best_match" -> 42.5, "gfs_seamless" -> 43.1)
+    pub model_temps: HashMap<String, f64>,
 }
 
 /// Convert Celsius to Fahrenheit
