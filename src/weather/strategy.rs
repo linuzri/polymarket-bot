@@ -29,6 +29,12 @@ pub struct WeatherTrade {
     pub price: f64,
     pub cost: f64,
     pub dry_run: bool,
+    #[serde(default)]
+    pub resolved: bool,
+    #[serde(default)]
+    pub filled: bool,
+    #[serde(default)]
+    pub order_id: Option<String>,
 }
 
 /// Weather strategy runner
@@ -86,12 +92,9 @@ impl WeatherStrategy {
 
         trades.iter()
             .filter(|t| !t.dry_run)
+            .filter(|t| !t.resolved)
             .filter(|t| {
-                // Extract date from market_question (e.g. "...on February 21?")
-                // Or use timestamp — trades from today or later are potentially unresolved
-                // Simple heuristic: trades from last 3 days could still be open
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
-                    let trade_date = ts.format("%Y-%m-%d").to_string();
                     let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
                     days_ago <= 4 // weather markets can be up to 2 days out; 4-day window is safe
                 } else {
@@ -111,6 +114,7 @@ impl WeatherStrategy {
 
         trades.iter()
             .filter(|t| !t.dry_run)
+            .filter(|t| !t.resolved)
             .filter(|t| {
                 // Only consider trades from last 4 days (weather markets are 1-2 days out)
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
@@ -124,9 +128,75 @@ impl WeatherStrategy {
             .collect()
     }
 
+    /// Check strategy_trades.json for open positions and mark any that have resolved.
+    /// A position is resolved if Polymarket's Gamma API shows the market as closed.
+    /// Also marks stale unfilled orders (>24h) as resolved to free exposure.
+    async fn check_and_mark_resolved(&self) {
+        let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let mut changed = false;
+
+        for trade in all_trades.iter_mut() {
+            if trade.resolved || trade.dry_run {
+                continue;
+            }
+
+            // Check stale unfilled orders (>24h old) — cancel and free exposure
+            if !trade.filled {
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&trade.timestamp) {
+                    let hours_old = (Utc::now() - ts.with_timezone(&Utc)).num_hours();
+                    if hours_old > 24 {
+                        info!("Stale unfilled order ({}h old): {} | {}", hours_old, trade.market_question, trade.bucket_label);
+                        trade.resolved = true;
+                        changed = true;
+                        continue;
+                    }
+                }
+            }
+
+            // Check if market is closed via Gamma API
+            // Use first 30 chars of question as search term
+            let search_term = if trade.market_question.len() > 30 {
+                &trade.market_question[..30]
+            } else {
+                &trade.market_question
+            };
+
+            let url = format!(
+                "https://gamma-api.polymarket.com/markets?closed=true&limit=1&question={}",
+                search_term.replace(' ', "%20").replace('?', "%3F")
+            );
+
+            if let Ok(resp) = self.http.get(&url).send().await {
+                if let Ok(text) = resp.text().await {
+                    if text.contains(&trade.market_question[..20.min(trade.market_question.len())]) && text.len() > 10 {
+                        trade.resolved = true;
+                        changed = true;
+                        info!("Marked as resolved: {} | {}", trade.market_question, trade.bucket_label);
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        if changed {
+            if let Ok(json) = serde_json::to_string_pretty(&all_trades) {
+                let _ = std::fs::write("strategy_trades.json", json);
+            }
+        }
+    }
+
     /// Run a single scan cycle
     pub async fn run_once(&mut self) -> Result<u32> {
         let mode = if self.dry_run { "DRY RUN" } else { "LIVE" };
+
+        // Check and mark any resolved positions before scanning for new ones
+        self.check_and_mark_resolved().await;
+
         info!("Weather strategy scan starting ({})", mode);
 
         // Step 1: Discover weather markets
@@ -275,6 +345,8 @@ impl WeatherStrategy {
                         our_prob, market_price, edge, kelly_size);
                     println!("     LIMIT BUY {:.2} YES @ ${:.4} = ${:.2}", shares, order_price, cost);
 
+                    let mut captured_order_id: Option<String> = None;
+
                     if !self.dry_run {
                         match orders::place_order(
                             &client,
@@ -285,8 +357,13 @@ impl WeatherStrategy {
                             market.neg_risk,
                             false,
                         ).await {
-                            Ok(_) => {
+                            Ok(result) => {
                                 info!("Weather order placed: {} @ ${:.4}", bucket.label, order_price);
+                                // Capture order ID from CLOB response
+                                captured_order_id = result.get("orderID")
+                                    .or_else(|| result.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
                                 self.total_exposure += cost;
                                 trades_placed += 1;
                                 self.placed_this_session.insert(position_key.clone());
@@ -318,6 +395,9 @@ impl WeatherStrategy {
                         price: order_price,
                         cost,
                         dry_run: self.dry_run,
+                        resolved: false,
+                        filled: false,
+                        order_id: captured_order_id,
                     };
 
                     // Telegram notification
@@ -484,6 +564,9 @@ impl WeatherStrategy {
             price: trade.price,
             cost: trade.cost,
             dry_run: trade.dry_run,
+            resolved: trade.resolved,
+            filled: trade.filled,
+            order_id: trade.order_id.clone(),
         });
 
         let json = serde_json::to_string_pretty(&all_trades)?;

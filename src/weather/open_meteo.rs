@@ -51,7 +51,7 @@ impl OpenMeteoClient {
     pub async fn fetch_forecast(&self, city: &City) -> Result<Vec<CityForecast>> {
         // Try multi-model API first
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=4&models=gfs_seamless,icon_seamless,ecmwf_ifs025",
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=2&models=gfs_seamless,icon_seamless,ecmwf_ifs025",
             city.lat, city.lon
         );
 
@@ -84,7 +84,7 @@ impl OpenMeteoClient {
             TempUnit::Celsius => "",
         };
         let fallback_url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=4{}",
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=2{}",
             city.lat, city.lon, unit_param
         );
 

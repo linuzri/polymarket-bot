@@ -46,5 +46,5 @@ cities_intl = ["london", "seoul", "paris", "toronto", "buenos-aires", "ankara", 
 
 [notifications]
 # Telegram notifications
-telegram_enabled = false
-telegram_chat_id = ""
+telegram_enabled = true
+telegram_chat_id = "3588682"
