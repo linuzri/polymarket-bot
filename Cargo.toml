@@ -55,3 +55,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Statistics (normal distribution for weather strategy)
 statrs = "0.17"
+
+[profile.release]
+opt-level = 1
+codegen-units = 16
