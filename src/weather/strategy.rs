@@ -312,7 +312,7 @@ impl WeatherStrategy {
                     let order_price = order_price.max(0.01).min(0.95); // clamp to valid range
 
                     // Ensure we still have edge at our order price
-                    if our_prob - order_price < 0.05 {
+                    if our_prob - order_price < 0.04 {
                         debug!("Edge too thin at order price ${:.2} vs prob {:.2}", order_price, our_prob);
                         continue;
                     }
