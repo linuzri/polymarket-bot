@@ -131,7 +131,7 @@ impl WeatherStrategy {
     /// Check strategy_trades.json for open positions and mark any that have resolved.
     /// A position is resolved if Polymarket's Gamma API shows the market as closed.
     /// Also marks stale unfilled orders (>24h) as resolved to free exposure.
-    async fn check_and_mark_resolved(&self) {
+    async fn check_and_mark_resolved(&mut self) {
         let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
             Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
             Err(_) => return,
@@ -151,6 +151,8 @@ impl WeatherStrategy {
                     if hours_old > 24 {
                         info!("Stale unfilled order ({}h old): {} | {}", hours_old, trade.market_question, trade.bucket_label);
                         trade.resolved = true;
+                        self.total_exposure -= trade.cost;
+                        info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
                         changed = true;
                         continue;
                     }
@@ -172,10 +174,11 @@ impl WeatherStrategy {
 
             if let Ok(resp) = self.http.get(&url).send().await {
                 if let Ok(text) = resp.text().await {
-                    if text.contains(&trade.market_question[..20.min(trade.market_question.len())]) && text.len() > 10 {
+                    if text.contains(&trade.market_question[..50.min(trade.market_question.len())]) && text.len() > 10 {
                         trade.resolved = true;
+                        self.total_exposure -= trade.cost;
+                        info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
                         changed = true;
-                        info!("Marked as resolved: {} | {}", trade.market_question, trade.bucket_label);
                     }
                 }
             }
