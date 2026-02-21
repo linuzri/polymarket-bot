@@ -93,7 +93,7 @@ impl WeatherStrategy {
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
                     let trade_date = ts.format("%Y-%m-%d").to_string();
                     let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
-                    days_ago <= 2 // trades from last 2 days could be unresolved
+                    days_ago <= 4 // weather markets can be up to 2 days out; 4-day window is safe
                 } else {
                     false
                 }
@@ -332,14 +332,16 @@ impl WeatherStrategy {
 
                     self.trades.push(trade);
 
+                    // Save immediately after each trade to prevent data loss on crash
+                    if let Err(e) = self.save_trade_log() {
+                        error!("Failed to save trade log: {}", e);
+                    }
+
                     // Rate limit between orders
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             }
         }
-
-        // Save trade log
-        self.save_trade_log()?;
 
         if trades_placed > 0 {
             info!("Weather strategy: {} trades placed, ${:.2} total exposure", trades_placed, self.total_exposure);
@@ -377,8 +379,8 @@ impl WeatherStrategy {
                         for i in 0..forecasts.len() {
                             let date = forecasts[i].date.clone();
                             if let Some(&noaa_temp) = noaa_by_date.get(&date) {
-                                // Apply +1.0F warm bias to match Open-Meteo bias
-                                let biased_temp = noaa_temp + 1.0;
+                                // Apply configurable warm bias to match Open-Meteo bias
+                                let biased_temp = noaa_temp + self.config.noaa_warm_bias_f;
                                 forecasts[i].model_temps.insert("noaa".to_string(), biased_temp);
 
                                 // Recalculate mean with NOAA included
@@ -448,7 +450,7 @@ impl WeatherStrategy {
         let kelly = kelly_full * self.config.kelly_fraction;
 
         // Clamp to max per bucket
-        let bankroll = self.config.max_total_exposure;
+        let bankroll = self.config.kelly_bankroll;
         let size = (kelly * bankroll).max(0.0).min(self.config.max_per_bucket);
 
         // Don't exceed remaining exposure

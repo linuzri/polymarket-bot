@@ -33,6 +33,10 @@ pub struct WeatherConfig {
     pub forecast_buffer_f: f64,
     #[serde(default = "default_forecast_buffer_c")]
     pub forecast_buffer_c: f64,
+    #[serde(default = "default_kelly_bankroll")]
+    pub kelly_bankroll: f64,
+    #[serde(default = "default_noaa_warm_bias_f")]
+    pub noaa_warm_bias_f: f64,
 }
 
 impl Default for WeatherConfig {
@@ -48,6 +52,8 @@ impl Default for WeatherConfig {
             cities_intl: default_cities_intl(),
             forecast_buffer_f: 3.0,
             forecast_buffer_c: 2.0,
+            kelly_bankroll: 100.0,
+            noaa_warm_bias_f: 1.0,
         }
     }
 }
@@ -58,6 +64,8 @@ fn default_min_edge() -> f64 { 0.15 }
 fn default_max_per_bucket() -> f64 { 10.0 }
 fn default_max_total_exposure() -> f64 { 50.0 }
 fn default_kelly_fraction() -> f64 { 0.25 }
+fn default_kelly_bankroll() -> f64 { 100.0 }
+fn default_noaa_warm_bias_f() -> f64 { 1.0 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()
