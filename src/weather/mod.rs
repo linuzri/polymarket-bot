@@ -138,6 +138,9 @@ fn intl_city(name: &str) -> Option<City> {
         "seoul" => (37.5665, 126.9780),
         "paris" => (48.8566, 2.3522),
         "toronto" => (43.6532, -79.3832),
+        "buenos-aires" | "buenos aires" => (-34.6037, -58.3816),
+        "ankara" => (39.9334, 32.8597),
+        "wellington" => (-41.2924, 174.7787),
         _ => return None,
     };
     Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Celsius })

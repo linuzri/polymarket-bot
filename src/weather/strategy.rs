@@ -458,31 +458,33 @@ impl WeatherStrategy {
         size.min(remaining)
     }
 
-    /// Save trade log to strategy_trades.json
+    /// Save trade log to strategy_trades.json (appends only the last trade)
     fn save_trade_log(&self) -> Result<()> {
-        // Load existing trades
+        // Only save the most recently added trade (last in self.trades)
+        // This avoids duplicate entries when called per-trade
+        let Some(trade) = self.trades.last() else {
+            return Ok(());
+        };
+
         let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
             Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
             Err(_) => Vec::new(),
         };
 
-        // Append new trades
-        for trade in &self.trades {
-            all_trades.push(WeatherTrade {
-                timestamp: trade.timestamp.clone(),
-                market_question: trade.market_question.clone(),
-                bucket_label: trade.bucket_label.clone(),
-                city: trade.city.clone(),
-                our_probability: trade.our_probability,
-                market_price: trade.market_price,
-                edge: trade.edge,
-                side: trade.side.clone(),
-                shares: trade.shares,
-                price: trade.price,
-                cost: trade.cost,
-                dry_run: trade.dry_run,
-            });
-        }
+        all_trades.push(WeatherTrade {
+            timestamp: trade.timestamp.clone(),
+            market_question: trade.market_question.clone(),
+            bucket_label: trade.bucket_label.clone(),
+            city: trade.city.clone(),
+            our_probability: trade.our_probability,
+            market_price: trade.market_price,
+            edge: trade.edge,
+            side: trade.side.clone(),
+            shares: trade.shares,
+            price: trade.price,
+            cost: trade.cost,
+            dry_run: trade.dry_run,
+        });
 
         let json = serde_json::to_string_pretty(&all_trades)?;
         std::fs::write("strategy_trades.json", json)?;
