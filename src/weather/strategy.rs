@@ -252,6 +252,15 @@ impl WeatherStrategy {
                     continue;
                 }
 
+                // Double-check against trade log file (catches positions from previous sessions
+                // that may not be in placed_this_session due to resolved/parsing issues)
+                let file_keys = Self::load_open_position_keys();
+                if file_keys.contains(&position_key) {
+                    warn!("DOUBLE-CHECK SKIP: {} already in trade log", position_key);
+                    self.placed_this_session.insert(position_key.clone());
+                    continue;
+                }
+
                 // Forecast buffer check: skip bets where forecast is too close to bucket threshold.
                 // A 1-2° shift in forecast can flip the outcome — avoid borderline bets.
                 let buffer = match market.unit {
