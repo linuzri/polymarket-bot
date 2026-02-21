@@ -1,123 +1,133 @@
-# CLAUDE.md - Polymarket Bot
+# CLAUDE.md - Polymarket Weather Bot
 
 ## Project Overview
-Automated Polymarket prediction market trading bot built in Rust. **Pivoted to weather arbitrage strategy** — using NOAA + Open-Meteo forecasts to find mispriced temperature markets and placing limit orders at fair value.
+Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** — uses NOAA + Open-Meteo forecasts to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Feb 16, 2026)
-- **Balance:** ~$26.56 USDC cash + ~$86 in positions (2 Fed + 2 weather)
-- **Strategy:** 100% WEATHER FOCUS — all other strategies on backlog
-- **Process:** Weather runs via OpenClaw cron every 3 hours (`weather --once`)
-- **Dashboard sync:** `scripts/sync_dashboard.py` runs every 3h via cron → pushes to Supabase
+## Current Status (Feb 21, 2026)
+- **Portfolio:** ~$118 | Cash: ~$85 USDC | All-time P/L: +$18.22
+- **Open Positions:** Seoul 14°C (+266%), Atlanta 59°F, Ankara 10°C
+- **PM2:** `polymarket-bot` ONLINE — continuous `weather` run_loop, scans every 30 min
+- **Telegram:** Trade alerts enabled (chat_id: 3588682)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
-- **polymarket-bot:** STOPPED (AI strategy paused)
-- **Telegram:** Trade alerts on weather orders
 
-### Recent Changes (Feb 16)
-- **Weather hardening** (commit `5c39318`): Forecast buffer (3°F/2°C), higher std_dev, min_edge 15%
-- **Dashboard sync script** added: `scripts/sync_dashboard.py` — fetches live prices, updates Supabase
-- Miami/Seoul bets lost due to borderline forecasts — hardening prevents future borderline bets
+### Complete Overhaul (Feb 21, 2026)
+All fixes implemented and verified this session:
 
-## Strategy: Weather Arbitrage (ACTIVE — Primary Focus)
-- Scans 26+ weather markets across 13 cities (today + tomorrow)
-- Compares NOAA/Open-Meteo forecasts against Polymarket bucket prices
-- Normal distribution probability model (configurable std dev per source)
-- Places LIMIT BUY orders at 85% of fair value (maker, not taker)
-- Zero maker fees on Polymarket
-- Kelly criterion sizing: 40% fraction, $20 max/bucket, $100 total exposure
-- Min edge: 15% (raised from 10% after Miami/Seoul losses)
-- Resolution: 1-2 days (fast capital recycling)
-- Cron: every 3 hours via OpenClaw
-- **Multi-source verification:** `weather_multi_source.py` cross-checks 4 Open-Meteo models (best_match, gfs_seamless, icon_seamless, ecmwf_ifs025) with station bias correction. Only flags trades when 3+/4 models agree on the same bucket. Run with `python weather_multi_source.py --date YYYY-MM-DD`
+| Fix | Detail |
+|-----|--------|
+| **Per-position dedup** | `placed_this_session: HashSet<String>` prevents re-entering same market+bucket |
+| **Crash-safe logging** | `save_trade_log()` called per-trade, only appends last entry (no duplicates) |
+| **Resolved tracking** | `resolved: bool` on WeatherTrade, Gamma API checks for closed markets |
+| **Exposure management** | `load_existing_exposure()` filters resolved trades, 4-day window, mid-session decrement |
+| **Kelly bankroll** | Separate `kelly_bankroll=100` from `max_total_exposure=60` |
+| **NOAA bias configurable** | `noaa_warm_bias_f` in config.toml (was hardcoded +1.0) |
+| **3 missing cities** | buenos-aires, ankara, wellington added to `intl_city()` coordinates |
+| **forecast_days** | 4→2 in Open-Meteo URLs (only need today+tomorrow) |
+| **Telegram** | Enabled in config.toml |
+| **Edge-at-order-price** | Threshold 0.05→0.04 (floating point tolerance) |
+| **False-positive fix** | Match length 20→50 chars in resolved detection |
 
-### Why Weather Works
-- Informational edge: weather forecasts are reliable (not just sentiment)
-- Wide bid-ask spreads = mispricing opportunities
-- Fast resolution = quick compounding
+### Known Limitations
+- `filled` field always false — no CLOB fill-confirmation endpoint
+- `order_id` captured from CLOB response but not used for fill tracking
+- No auto-redeem — PolymarketClient has no redeem/settle/merge methods
+- Positions resolve via Gamma API closed-market check only
 
-### Forecast Buffer (Added Feb 16)
-- Skip bets where forecast is within 3°F (US) / 2°C (intl) of bucket threshold
-- Prevents borderline bets killed by small forecast shifts
-- Higher std_dev: NOAA 3.5+2.0x/day, Open-Meteo 2.0+1.0x/day (°C)
+## Strategy: Weather Arbitrage
+- Scans 26 weather markets across 13 cities (today + tomorrow)
+- Compares NOAA (US) + Open-Meteo ensemble (international) forecasts against market prices
+- Normal distribution probability model per temperature bucket
+- Places LIMIT BUY orders at 85% of fair value (maker, zero fees)
+- Kelly criterion sizing: 40% fraction, $100 bankroll, $20 max/bucket, $60 total exposure
+- Min edge: 15% | Forecast buffer: 3°F / 2°C
+- Resolution: 1-2 days
 
 ### Cities
-- **US (°F):** NYC, Chicago, Miami, Atlanta, Seattle, Dallas (NOAA)
-- **International (°C):** London, Seoul, Paris, Toronto, Buenos Aires, Ankara, Wellington (Open-Meteo)
+- **US (°F, NOAA + Open-Meteo):** NYC, Chicago, Miami, Atlanta, Seattle, Dallas
+- **International (°C, Open-Meteo only):** London, Seoul, Paris, Toronto, Buenos Aires, Ankara, Wellington
+- Checked Feb 21: no other cities have Polymarket weather markets
 
 ### Market Discovery
 - Slug-based: `highest-temperature-in-{city}-on-{month}-{day}-{year}`
 - Gamma API: `GET https://gamma-api.polymarket.com/events?slug={slug}`
-- Tag/category search does NOT work for weather markets
+- `WEATHER_CITIES` in `markets.rs` must match `cities_us`/`cities_intl` in config.toml
 
 ## Architecture
 ```
 polymarket-bot/
 ├── src/
-│   ├── api/
-│   │   ├── client.rs      # API client (Gamma + CLOB + tick size fetching)
-│   │   └── endpoints.rs   # URL constants
-│   ├── weather/            # WEATHER ARBITRAGE (PRIMARY STRATEGY)
-│   │   ├── mod.rs          # Module defs, city configs, WeatherConfig, TempUnit
-│   │   ├── noaa.rs         # NOAA API client (api.weather.gov) for US cities
-│   │   ├── open_meteo.rs   # Open-Meteo ensemble forecasts for international cities
-│   │   ├── forecast.rs     # Normal distribution probability calculation per bucket
-│   │   ├── markets.rs      # Gamma API weather market discovery + temp bucket parsing
-│   │   └── strategy.rs     # Edge detection, Kelly sizing, trade execution, logging
-│   ├── arbitrage/          # Sniper + arb (BACKLOG — stopped)
-│   ├── auth/               # L2 HMAC auth + EIP-712 signing
-│   ├── models/             # Market, OrderBook structs
-│   ├── orders/             # Tick-size-aware order signing
-│   ├── notifications/      # Telegram notifications
-│   ├── portfolio/          # Position tracking
-│   ├── strategy/           # AI evaluator (PAUSED)
-│   ├── btc5min/            # BTC 5-min (DISABLED)
-│   └── main.rs             # CLI: weather, arb, portfolio, paper
-├── config.toml             # Weather config (primary)
-├── ecosystem.config.js     # PM2 config (arb stopped)
-├── .env                    # Credentials (NEVER commit)
-└── scripts/                # Helper scripts
+│   ├── weather/                # PRIMARY STRATEGY
+│   │   ├── mod.rs              # WeatherConfig struct, City, get_cities(), us_city(), intl_city()
+│   │   ├── strategy.rs         # WeatherStrategy: run_once(), check_and_mark_resolved(), Kelly sizing
+│   │   ├── forecast.rs         # Normal distribution probability per bucket
+│   │   ├── markets.rs          # WEATHER_CITIES list, slug generation, Gamma API discovery
+│   │   ├── noaa.rs             # NOAA API (api.weather.gov) — US cities
+│   │   └── open_meteo.rs       # Open-Meteo 3-model ensemble — all cities
+│   ├── api/client.rs           # PolymarketClient (Gamma + CLOB)
+│   ├── auth/mod.rs             # L2 HMAC + EIP-712 signing
+│   ├── orders/mod.rs           # place_order() → returns JSON with orderID
+│   ├── notifications/mod.rs    # Telegram alerts
+│   └── main.rs                 # CLI entry point
+├── config.toml                 # Strategy configuration
+├── ecosystem.config.js         # PM2 config (polymarket-bot → weather)
+├── strategy_trades.json        # Trade log (crash-safe, per-trade writes)
+├── weather_multi_source.py     # Python multi-source forecasting (5 models + bias correction)
+└── .env                        # Wallet keys + Telegram token (NEVER commit)
 ```
 
-## Key Concepts
+## Key Patterns
 
-### Order Book Reality
-- Weather markets have MASSIVE bid-ask spreads (e.g., 63¢ on Miami)
-- Gamma API mid-prices are synthetic, NOT tradeable
-- Must place LIMIT orders at fair value and wait for fills
-- We are MAKERS (zero fees), not takers
+### WeatherTrade struct (strategy.rs)
+```rust
+pub struct WeatherTrade {
+    timestamp, market_question, bucket_label, city,
+    our_probability, market_price, edge, side,
+    shares, price, cost, dry_run,
+    resolved: bool,     // true when market closed (Gamma API)
+    filled: bool,       // always false (no fill confirmation)
+    order_id: Option<String>,  // from CLOB response
+}
+```
 
-### Tick Size System
-- CLOB API: each market has `minimum_tick_size` (0.1, 0.01, 0.001, or 0.0001)
-- Weather markets: typically 0.01
-- Order amounts rounded per ROUNDING_CONFIG
+### run_once() flow
+1. `check_and_mark_resolved()` — queries Gamma API for closed markets, frees exposure
+2. Discover 26 weather markets via slug patterns
+3. Fetch forecasts (NOAA + Open-Meteo) for 13 cities × 2 days
+4. For each bucket: dedup check → buffer check → edge check → Kelly sizing → order
+5. `save_trade_log()` after each successful trade
 
-## Backlog Strategies (Not Active)
-- **Sniper:** Buy 90-99.9% certain outcomes, hold to resolution
-- **Multi-outcome arb:** Buy all YES if sum < $1.00
-- **2-outcome arb:** Buy YES+NO if sum < $0.985
-- **Hybrid take-profit:** Sell sniper positions at 99¢+ bid
-- **AI Evaluator:** Two-tier Claude evaluation (cost ~$1.50/day)
+### Deduplication
+- `placed_this_session: HashSet<String>` — keys are `"question|bucket"`
+- Loaded from `strategy_trades.json` (non-dry-run, non-resolved, last 4 days) on startup
+- Inserted after each successful order placement
+
+### Exposure Tracking
+- `load_existing_exposure()` sums cost of non-dry-run, non-resolved trades from last 4 days
+- Decremented in-memory when `check_and_mark_resolved()` resolves a position
+- `max_total_exposure=60` caps concurrent positions
 
 ## Critical Rules
-- **NEVER commit .env or hardcoded keys**
-- **Unicode:** No Unicode special chars in log messages (Windows cp1252)
-- **CLOB price constraint:** Price must be >0 and <1
-- **Addresses must be checksummed** for CLOB API
+- **NEVER commit .env** — wallet keys + Telegram token
+- **PM2 release build:** Stop `polymarket-bot` before `cargo build --release`
+- **Unicode:** No special chars in log messages (Windows cp1252)
+- **CLOB prices:** Must be >0 and <1
+- **Checksummed addresses** for CLOB API
 - **signature_type=1** for proxy wallet orders
-- **PM2 release build:** Must stop ALL processes sharing the exe before `cargo build --release`
+- **Adding cities:** Must update BOTH `WEATHER_CITIES` in markets.rs AND config.toml + coordinate lookup in mod.rs
 
 ## Wallet
 - **EOA (signer):** 0x7ec329D34D2c94456c015B236EBEc41d2a7B3Bce
 - **Proxy (funder/maker):** 0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853
-- **Contract:** Neg risk exchange on Polygon (chain 137)
 
 ## Commands
 ```bash
-# Weather (primary)
-polymarket-bot.exe weather --once        # Single scan + trade
-polymarket-bot.exe weather --dry-run     # Test without trading
-polymarket-bot.exe weather               # Continuous loop
+# Weather (primary — PM2 managed)
+pm2 start ecosystem.config.js --only polymarket-bot
+pm2 logs polymarket-bot --lines 20
+pm2 restart polymarket-bot
 
-# Legacy (stopped)
-pm2 stop polymarket-arb                  # Arb bot stopped
-pm2 logs polymarket-arb                  # View old logs
+# Manual runs
+polymarket-bot.exe weather --once          # Single live scan
+polymarket-bot.exe weather --dry-run --once # Test without orders
+polymarket-bot.exe weather                  # Continuous loop (use PM2 instead)
 ```

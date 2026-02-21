@@ -4,22 +4,21 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 
 ## 🔴 Live Trading Status (Feb 21, 2026)
 
-- **Portfolio:** $118.49 | Cash: $84.70 USDC | All-time P/L: **+$18.22**
+- **Portfolio:** ~$118 | Cash: ~$85 USDC | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
-- **Open Positions:** 1 — Seoul temperature YES 41.5 shares @ 23.1¢ → 84.5¢ (+266%)
+- **Open Positions:** Seoul 14°C (41.5 shares, +266%), Atlanta 59°F (37 shares), Ankara 10°C (42.7 shares)
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
-- **PM2 Status:** `polymarket-arb` STOPPED, `polymarket-bot` STOPPED
-- **Scan Frequency:** Manual (run `weather --once` when needed)
-- **Cities:** 13 (6 US + 7 international)
+- **PM2:** `polymarket-bot` **ONLINE** — continuous `weather` run_loop, scans every 30 min
+- **Cities:** 13 (6 US + 7 international) — all with coordinates + forecast sources
 - **Forecast Models:** 5 for US (NOAA + 4× Open-Meteo), 4 for international (Open-Meteo ensemble)
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
-- **Best Trade:** Paris Feb 19 — +$3.72 (41% return)
-- **Config:** 15% min edge, 40% Kelly, $20/bucket, $20 total exposure (single position limit)
+- **Best Trade:** Seoul Feb 21 — +$25.46 (266% return, still open)
+- **Config:** 15% min edge, 40% Kelly, $20/bucket, $60 max exposure (3 concurrent positions), $100 Kelly bankroll (single position limit)
 
 ## How It Works
 
 ```
-On each manual run:
+Every 30 minutes (PM2 run_loop):
 1. Discover weather markets → 26+ markets across 13 cities (today + tomorrow)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (international)
 3. Calculate probabilities → Normal distribution per temperature bucket
@@ -76,11 +75,23 @@ London • Seoul • Paris • Toronto • Buenos Aires • Ankara • Wellingto
 
 ```toml
 [weather]
-min_edge = 0.15           # 15% minimum edge to trade
-max_per_bucket = 20.0     # $20 max per temperature bucket
-max_total_exposure = 20.0  # $20 total exposure (single position limit)
-kelly_fraction = 0.40      # 40% Kelly for position sizing
+min_edge = 0.15              # 15% minimum edge to trade
+max_per_bucket = 20.0        # $20 max per temperature bucket
+max_total_exposure = 60.0    # $60 total (up to 3 concurrent positions)
+kelly_fraction = 0.40        # 40% Kelly for position sizing
+kelly_bankroll = 100.0       # Actual capital for Kelly calculation
+noaa_warm_bias_f = 1.0       # NOAA warm bias correction (°F)
+forecast_buffer_f = 3.0      # °F buffer from bucket threshold
+forecast_buffer_c = 2.0      # °C buffer from bucket threshold
 ```
+
+## Safety Features
+
+- **Per-position deduplication** — won't re-enter the same market+bucket across scans
+- **Crash-safe trade logging** — saves to `strategy_trades.json` after each trade, not at end of cycle
+- **Resolved position tracking** — queries Gamma API for closed markets, frees exposure automatically
+- **Telegram notifications** — trade alerts + startup messages
+- **Exposure tracking** — loads unresolved trades from last 4 days on startup
 
 ## Quick Start
 
@@ -94,8 +105,12 @@ polymarket-bot.exe weather --dry-run --once
 # Single live scan
 polymarket-bot.exe weather --once
 
-# Continuous loop
-polymarket-bot.exe weather
+# Continuous loop (PM2 managed)
+pm2 start ecosystem.config.js --only polymarket-bot
+pm2 save
+
+# Check status
+pm2 logs polymarket-bot --lines 20
 ```
 
 ## Key Insight: Be a Maker, Not a Taker
