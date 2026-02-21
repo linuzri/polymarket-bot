@@ -144,21 +144,6 @@ impl WeatherStrategy {
                 continue;
             }
 
-            // Check stale unfilled orders (>24h old) — cancel and free exposure
-            if !trade.filled {
-                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&trade.timestamp) {
-                    let hours_old = (Utc::now() - ts.with_timezone(&Utc)).num_hours();
-                    if hours_old > 24 {
-                        info!("Stale unfilled order ({}h old): {} | {}", hours_old, trade.market_question, trade.bucket_label);
-                        trade.resolved = true;
-                        self.total_exposure -= trade.cost;
-                        info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
-                        changed = true;
-                        continue;
-                    }
-                }
-            }
-
             // Check if market is closed via Gamma API
             // Use first 30 chars of question as search term
             let search_term = if trade.market_question.len() > 30 {
