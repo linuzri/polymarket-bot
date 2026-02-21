@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{Utc, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn, error, debug};
@@ -415,6 +415,19 @@ impl WeatherStrategy {
             info!("Weather strategy: {} trades placed, ${:.2} total exposure", trades_placed, self.total_exposure);
         } else {
             info!("Weather strategy: no edges found this cycle");
+        }
+
+        // Heartbeat: send status every 2 hours (every 4th cycle at 30min intervals)
+        let hour = Utc::now().hour();
+        let minute = Utc::now().minute();
+        if minute < 30 && hour % 2 == 0 {
+            let remaining = self.config.max_total_exposure - self.total_exposure;
+            let mode = if self.dry_run { "DRY RUN" } else { "LIVE" };
+            let heartbeat = format!(
+                "[{}] [WEATHER HEARTBEAT] Bot running\nExposure: ${:.2}/${:.0} | Available: ${:.2}\nMarkets scanned: {} | Trades this cycle: {}",
+                mode, self.total_exposure, self.config.max_total_exposure, remaining, weather_markets.len(), trades_placed
+            );
+            self.notifier.send(&heartbeat).await;
         }
 
         Ok(trades_placed)
