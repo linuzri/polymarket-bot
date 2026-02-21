@@ -5,7 +5,7 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 
 ## Current Status (Feb 21, 2026)
 - **Portfolio:** ~$118 | Cash: ~$85 USDC | All-time P/L: +$18.22
-- **Open Positions:** Seoul 14°C (+266%), Atlanta 59°F, Ankara 10°C
+- **Open Positions:** Seoul 14°C (+266%), Dallas 59°F ($0.22), Ankara 10°C ($0.27)
 - **PM2:** `polymarket-bot` ONLINE — continuous `weather` run_loop, scans every 30 min
 - **Telegram:** Trade alerts enabled (chat_id: 3588682)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)

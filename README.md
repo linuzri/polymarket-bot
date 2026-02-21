@@ -6,7 +6,7 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 
 - **Portfolio:** ~$118 | Cash: ~$85 USDC | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
-- **Open Positions:** Seoul 14°C (41.5 shares, +266%), Atlanta 59°F (37 shares), Ankara 10°C (42.7 shares)
+- **Open Positions:** Seoul 14°C (41.5 shares, +266%), Dallas 59°F (37 shares @ $0.22), Ankara 10°C (42.7 shares @ $0.27)
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
 - **PM2:** `polymarket-bot` **ONLINE** — continuous `weather` run_loop, scans every 30 min
 - **Cities:** 13 (6 US + 7 international) — all with coordinates + forecast sources
