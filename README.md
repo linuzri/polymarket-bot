@@ -4,9 +4,9 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 
 ## 🔴 Live Trading Status (Feb 21, 2026)
 
-- **Portfolio:** ~$99.00 | Cash: ~$84.70 USDC | All-time P/L: **+$11.42**
+- **Portfolio:** $118.49 | Cash: $84.70 USDC | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
-- **Open Positions:** 0 (Fed positions resolved, Seoul resolved)
+- **Open Positions:** 1 — Seoul temperature YES 41.5 shares @ 23.1¢ → 84.5¢ (+266%)
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
 - **PM2 Status:** `polymarket-arb` STOPPED, `polymarket-bot` STOPPED
 - **Scan Frequency:** Manual (run `weather --once` when needed)
