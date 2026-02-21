@@ -8,8 +8,8 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Initial Deposit:** $100.27
 - **Open Positions:** 0 (Fed positions resolved, Seoul resolved)
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
-- **PM2 Status:** `polymarket-arb` STOPPED, `polymarket-bot` STOPPED — weather runs via cron only
-- **Scan Frequency:** Every 2 hours (OpenClaw cron)
+- **PM2 Status:** `polymarket-arb` STOPPED, `polymarket-bot` STOPPED
+- **Scan Frequency:** Manual (run `weather --once` when needed)
 - **Cities:** 13 (6 US + 7 international)
 - **Forecast Models:** 5 for US (NOAA + 4× Open-Meteo), 4 for international (Open-Meteo ensemble)
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
@@ -19,7 +19,7 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 ## How It Works
 
 ```
-Every 2 hours (OpenClaw cron):
+On each manual run:
 1. Discover weather markets → 26+ markets across 13 cities (today + tomorrow)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (international)
 3. Calculate probabilities → Normal distribution per temperature bucket
