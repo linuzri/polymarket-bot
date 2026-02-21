@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{info, warn, error, debug};
 
 use crate::api::client::PolymarketClient;
@@ -41,6 +41,7 @@ pub struct WeatherStrategy {
     dry_run: bool,
     total_exposure: f64,
     trades: Vec<WeatherTrade>,
+    placed_this_session: HashSet<String>,
 }
 
 impl WeatherStrategy {
@@ -49,6 +50,12 @@ impl WeatherStrategy {
         let existing_exposure = Self::load_existing_exposure();
         if existing_exposure > 0.0 {
             info!("Loaded existing weather exposure: ${:.2}", existing_exposure);
+        }
+
+        // Load already-traded position keys to prevent duplicate entries
+        let existing_keys = Self::load_open_position_keys();
+        if !existing_keys.is_empty() {
+            info!("Loaded {} existing position keys (dedup)", existing_keys.len());
         }
 
         Self {
@@ -64,6 +71,7 @@ impl WeatherStrategy {
             dry_run,
             total_exposure: existing_exposure,
             trades: Vec::new(),
+            placed_this_session: existing_keys,
         }
     }
 
@@ -92,6 +100,28 @@ impl WeatherStrategy {
             })
             .map(|t| t.cost)
             .sum()
+    }
+
+    /// Load position keys from strategy_trades.json to prevent duplicate entries
+    fn load_open_position_keys() -> HashSet<String> {
+        let trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return HashSet::new(),
+        };
+
+        trades.iter()
+            .filter(|t| !t.dry_run)
+            .filter(|t| {
+                // Only consider trades from last 4 days (weather markets are 1-2 days out)
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
+                    let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
+                    days_ago <= 4
+                } else {
+                    false
+                }
+            })
+            .map(|t| format!("{}|{}", t.market_question, t.bucket_label))
+            .collect()
     }
 
     /// Run a single scan cycle
@@ -154,6 +184,13 @@ impl WeatherStrategy {
 
                 let market_price = bucket.yes_price;
                 if market_price <= 0.0 || market_price >= 1.0 {
+                    continue;
+                }
+
+                // Per-position deduplication: skip if we already have a position in this exact market+bucket
+                let position_key = format!("{}|{}", market.question, bucket.label);
+                if self.placed_this_session.contains(&position_key) {
+                    debug!("SKIP: Already have position in {} | {}", market.question, bucket.label);
                     continue;
                 }
 
@@ -252,6 +289,7 @@ impl WeatherStrategy {
                                 info!("Weather order placed: {} @ ${:.4}", bucket.label, order_price);
                                 self.total_exposure += cost;
                                 trades_placed += 1;
+                                self.placed_this_session.insert(position_key.clone());
                             }
                             Err(e) => {
                                 error!("Weather order failed: {}", e);
@@ -263,6 +301,7 @@ impl WeatherStrategy {
                         println!("     (DRY RUN — not executing)");
                         self.total_exposure += cost;
                         trades_placed += 1;
+                        self.placed_this_session.insert(position_key.clone());
                     }
 
                     // Log trade
