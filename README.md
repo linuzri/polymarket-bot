@@ -2,21 +2,24 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo weather forecasts** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status
+## 🔴 Live Trading Status (Feb 21, 2026)
 
-- **Balance:** ~$26.56 USDC + ~$86 in positions (2 Fed legacy + 2 weather)
+- **Portfolio:** ~$99.00 | Cash: ~$84.70 USDC | All-time P/L: **+$11.42**
 - **Initial Deposit:** $100.27
+- **Open Positions:** 0 (Fed positions resolved, Seoul resolved)
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
-- **Scan Frequency:** Every 3 hours (OpenClaw cron)
-- **Dashboard Sync:** Every 3h → Supabase → [Live Dashboard](https://trade-bot-hq.vercel.app)
+- **PM2 Status:** `polymarket-arb` STOPPED, `polymarket-bot` STOPPED — weather runs via cron only
+- **Scan Frequency:** Every 2 hours (OpenClaw cron)
 - **Cities:** 13 (6 US + 7 international)
+- **Forecast Models:** 5 for US (NOAA + 4× Open-Meteo), 4 for international (Open-Meteo ensemble)
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
-- **Hardening (Feb 16):** Forecast buffer (3°F/2°C), higher uncertainty, 15% min edge
+- **Best Trade:** Paris Feb 19 — +$3.72 (41% return)
+- **Config:** 15% min edge, 40% Kelly, $20/bucket, $20 total exposure (single position limit)
 
 ## How It Works
 
 ```
-Every 3 hours:
+Every 2 hours (OpenClaw cron):
 1. Discover weather markets → 26+ markets across 13 cities (today + tomorrow)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (international)
 3. Calculate probabilities → Normal distribution per temperature bucket
@@ -54,6 +57,9 @@ polymarket-bot/
 │   ├── orders/mod.rs         # Tick-size-aware order placement
 │   ├── notifications/mod.rs  # Telegram alerts
 │   └── main.rs               # CLI entry point
+├── weather_multi_source.py   # Python multi-source forecasting (5 models + bias correction)
+├── check_balance.py          # Portfolio balance checker
+├── check_exposure.py         # Current exposure calculator
 ├── config.toml               # Strategy configuration
 └── .env                      # Wallet keys (never committed)
 ```
@@ -70,9 +76,9 @@ London • Seoul • Paris • Toronto • Buenos Aires • Ankara • Wellingto
 
 ```toml
 [weather]
-min_edge = 0.10           # 10% minimum edge to trade
+min_edge = 0.15           # 15% minimum edge to trade
 max_per_bucket = 20.0     # $20 max per temperature bucket
-max_total_exposure = 100.0 # $100 total portfolio limit
+max_total_exposure = 20.0  # $20 total exposure (single position limit)
 kelly_fraction = 0.40      # 40% Kelly for position sizing
 ```
 
