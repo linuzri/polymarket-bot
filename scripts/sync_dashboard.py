@@ -7,8 +7,9 @@ import json
 import requests
 from datetime import datetime, timezone
 
-SUPABASE_URL = "https://cxpablqwnwvacuvhcjen.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4cGFibHF3bnd2YWN1dmhjamVuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDQxNDY1NSwiZXhwIjoyMDg1OTkwNjU1fQ.3KJQDs86YXLpKBX0lD7RJ27BD4MrcxfDz-2jhQYlN_8"
+import os
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://cxpablqwnwvacuvhcjen.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 PORTFOLIO_PATH = r"C:\Users\Nazri Hussain\projects\polymarket-bot\portfolio_state.json"
 
 def fetch_market_price(slug, side):
