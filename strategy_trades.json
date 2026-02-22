@@ -2,7 +2,7 @@
   {
     "timestamp": "2026-02-16T01:46:33.397847500+00:00",
     "market_question": "Highest temperature in Miami on February 16?",
-    "bucket_label": "81°F or lower",
+    "bucket_label": "81\u00c2\u00b0F or lower",
     "city": "miami",
     "our_probability": 0.5987063256829237,
     "market_price": 0.335,
@@ -11,12 +11,15 @@
     "shares": 9.71,
     "price": 0.51,
     "cost": 4.952100000000001,
-    "dry_run": true
+    "dry_run": true,
+    "resolved": false,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-16T01:46:34.914435900+00:00",
     "market_question": "Highest temperature in Seoul on February 17?",
-    "bucket_label": "7°C or higher",
+    "bucket_label": "7\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.3970965479070303,
     "market_price": 0.1,
@@ -25,12 +28,15 @@
     "shares": 12.13,
     "price": 0.34,
     "cost": 4.124200000000001,
-    "dry_run": true
+    "dry_run": true,
+    "resolved": false,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-16T01:55:59.887754700+00:00",
     "market_question": "Highest temperature in Miami on February 16?",
-    "bucket_label": "81°F or lower",
+    "bucket_label": "81\u00c2\u00b0F or lower",
     "city": "miami",
     "our_probability": 0.5987063256829237,
     "market_price": 0.255,
@@ -39,12 +45,15 @@
     "shares": 11.3,
     "price": 0.51,
     "cost": 5.763000000000001,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-16T01:56:02.366847700+00:00",
     "market_question": "Highest temperature in Seoul on February 17?",
-    "bucket_label": "7°C or higher",
+    "bucket_label": "7\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.3970965479070303,
     "market_price": 0.1,
@@ -53,12 +62,15 @@
     "shares": 12.13,
     "price": 0.34,
     "cost": 4.124200000000001,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-18T02:51:05.696189100+00:00",
     "market_question": "Highest temperature in Paris on February 19?",
-    "bucket_label": "10°C or higher",
+    "bucket_label": "10\u00c2\u00b0C or higher",
     "city": "paris",
     "our_probability": 0.833144652113679,
     "market_price": 0.385,
@@ -67,12 +79,15 @@
     "shares": 12.82,
     "price": 0.71,
     "cost": 9.1022,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-20T02:55:09.454247+00:00",
     "market_question": "Highest temperature in Seoul on February 21?",
-    "bucket_label": "14°C or higher",
+    "bucket_label": "14\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.7976716190173427,
     "market_price": 0.155,
@@ -81,12 +96,15 @@
     "shares": 13.98,
     "price": 0.68,
     "cost": 9.5064,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-20T02:56:24.220738700+00:00",
     "market_question": "Highest temperature in Seoul on February 21?",
-    "bucket_label": "14°C or higher",
+    "bucket_label": "14\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.7976716190173427,
     "market_price": 0.155,
@@ -95,12 +113,15 @@
     "shares": 13.98,
     "price": 0.68,
     "cost": 9.5064,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-20T03:56:23.539801500+00:00",
     "market_question": "Highest temperature in Seoul on February 21?",
-    "bucket_label": "14°C or higher",
+    "bucket_label": "14\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.824676055132229,
     "market_price": 0.28,
@@ -109,12 +130,15 @@
     "shares": 13.5,
     "price": 0.7,
     "cost": 9.45,
-    "dry_run": false
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": null
   },
   {
     "timestamp": "2026-02-20T07:50:21.903163400+00:00",
     "market_question": "Highest temperature in Seoul on February 21?",
-    "bucket_label": "14°C or higher",
+    "bucket_label": "14\u00c2\u00b0C or higher",
     "city": "seoul",
     "our_probability": 0.824676055132229,
     "market_price": 0.33,
@@ -123,6 +147,94 @@
     "shares": 13.18,
     "price": 0.7,
     "cost": 9.226,
-    "dry_run": true
+    "dry_run": true,
+    "resolved": false,
+    "filled": false,
+    "order_id": null
+  },
+  {
+    "timestamp": "2026-02-21T05:15:15.490902900+00:00",
+    "market_question": "Highest temperature in Dallas on February 21?",
+    "bucket_label": "59\u00c2\u00b0F or lower",
+    "city": "dallas",
+    "our_probability": 0.26352449228145725,
+    "market_price": 0.075,
+    "edge": 0.18852449228145723,
+    "side": "BUY_YES",
+    "shares": 37.05,
+    "price": 0.22,
+    "cost": 8.151,
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": "0x09712c6db16af321cedefa4b849cae69f8c7136eed4866016467783563700004"
+  },
+  {
+    "timestamp": "2026-02-21T05:15:17.024308800+00:00",
+    "market_question": "Highest temperature in Ankara on February 22?",
+    "bucket_label": "10\u00c2\u00b0C or higher",
+    "city": "ankara",
+    "our_probability": 0.31548950342832716,
+    "market_price": 0.0385,
+    "edge": 0.2769895034283272,
+    "side": "BUY_YES",
+    "shares": 42.67,
+    "price": 0.27,
+    "cost": 11.5209,
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": "0xec30fd1b347eee8d8002ae42590c1010bed89f8ced182561e38a6b8450342305"
+  },
+  {
+    "timestamp": "2026-02-21T09:46:19.853741600+00:00",
+    "market_question": "Highest temperature in Ankara on February 22?",
+    "bucket_label": "10\u00c2\u00b0C or higher",
+    "city": "ankara",
+    "our_probability": 0.3221629953417564,
+    "market_price": 0.026,
+    "edge": 0.2961629953417564,
+    "side": "BUY_YES",
+    "shares": 45.04,
+    "price": 0.27,
+    "cost": 12.1608,
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": "0xf9566992b7cb13f65d86f10b505257ab1d50af1198a4b5c43b83dd17f354600d"
+  },
+  {
+    "timestamp": "2026-02-21T12:00:32.415121800+00:00",
+    "market_question": "Highest temperature in Ankara on February 22?",
+    "bucket_label": "10\u00c2\u00b0C or higher",
+    "city": "ankara",
+    "our_probability": 0.3418543937003953,
+    "market_price": 0.0105,
+    "edge": 0.33135439370039527,
+    "side": "BUY_YES",
+    "shares": 46.18,
+    "price": 0.29,
+    "cost": 13.3922,
+    "dry_run": true,
+    "resolved": false,
+    "filled": false,
+    "order_id": null
+  },
+  {
+    "timestamp": "2026-02-21T14:48:54.437903500+00:00",
+    "market_question": "Highest temperature in NYC on February 22?",
+    "bucket_label": "44\u00c2\u00b0F or higher",
+    "city": "nyc",
+    "our_probability": 0.297797157867338,
+    "market_price": 0.0075,
+    "edge": 0.290297157867338,
+    "side": "BUY_YES",
+    "shares": 46.79,
+    "price": 0.25,
+    "cost": 11.6975,
+    "dry_run": false,
+    "resolved": true,
+    "filled": false,
+    "order_id": "0xa5693b052dfe012211a26856b18ed27742863ca5fc160ad7c297e0d079d6a1c9"
   }
 ]

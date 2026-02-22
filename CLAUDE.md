@@ -1,17 +1,30 @@
 # CLAUDE.md - Polymarket Weather Bot
 
 ## Project Overview
-Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** — uses NOAA + Open-Meteo forecasts to find mispriced temperature markets and places limit orders at fair value.
+Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** — uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Feb 21, 2026)
-- **Portfolio:** ~$118 | Cash: ~$85 USDC | All-time P/L: +$18.22
-- **Open Positions:** Seoul 14°C (+266%), Dallas 59°F ($0.22), Ankara 10°C ($0.27)
+## Current Status (Feb 22, 2026)
+- **Portfolio:** $119.29 USDC | All-time P/L: +$18.22 (on $100.27 deposit)
+- **Open Positions:** NONE — all weather resolved, Fed positions manually closed
 - **PM2:** `polymarket-bot` ONLINE — continuous `weather` run_loop, scans every 30 min
 - **Telegram:** Trade alerts enabled (chat_id: 3588682)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
 
-### Complete Overhaul (Feb 21, 2026)
-All fixes implemented and verified this session:
+### Feb 22 Upgrades (v2 — Major)
+
+| Task | Detail |
+|------|--------|
+| **Ensemble probabilities** | 119 members from 3 ensemble systems (ECMWF 51 + GFS 31 + ICON 40) via Open-Meteo Ensemble API. Non-parametric: each member votes for a bucket. Falls back to normal distribution if <20 members. |
+| **Configurable Open-Meteo bias** | Removed hardcoded +1.0°F/+0.5°C warm bias. Now `open_meteo_bias_f` and `open_meteo_bias_c` in config.toml (default 0.0). |
+| **Min market price filter** | `min_market_price = 0.05` — skips buckets priced below 5¢ where model is unreliable in tails. |
+| **Quarter-Kelly** | `kelly_fraction` 0.40 → 0.25. Industry standard for prediction markets. |
+| **Real-time observations** | `observations.rs` — fetches current temperature for same-day markets. Adjusts forecast upward if current temp > forecast high. |
+| **WUnderground stations** | `wunderground_station` on City struct. Logged per trade for resolution tracking. |
+| **3-day discovery** | Markets discovered for today + tomorrow + day_after_tomorrow. `forecast_days=3`. |
+| **Slug-based resolution** | `check_and_mark_resolved()` queries Gamma API by slug instead of brittle question substring matching. |
+| **market_slug in trade log** | `WeatherTrade` includes `market_slug` field for reliable resolution. |
+
+### Previous Overhaul (Feb 21, 2026)
 
 | Fix | Detail |
 |-----|--------|
@@ -22,34 +35,35 @@ All fixes implemented and verified this session:
 | **Kelly bankroll** | Separate `kelly_bankroll=100` from `max_total_exposure=60` |
 | **NOAA bias configurable** | `noaa_warm_bias_f` in config.toml (was hardcoded +1.0) |
 | **3 missing cities** | buenos-aires, ankara, wellington added to `intl_city()` coordinates |
-| **forecast_days** | 4→2 in Open-Meteo URLs (only need today+tomorrow) |
 | **Telegram** | Enabled in config.toml |
-| **Edge-at-order-price** | Threshold 0.05→0.04 (floating point tolerance) |
-| **False-positive fix** | Match length 20→50 chars in resolved detection |
 
 ### Known Limitations
 - `filled` field always false — no CLOB fill-confirmation endpoint
 - `order_id` captured from CLOB response but not used for fill tracking
 - No auto-redeem — PolymarketClient has no redeem/settle/merge methods
-- Positions resolve via Gamma API closed-market check only
+- Legacy trades (pre-Feb 22) in strategy_trades.json have no `market_slug` — resolution falls back to substring matching
 
 ## Strategy: Weather Arbitrage
-- Scans 26 weather markets across 13 cities (today + tomorrow)
-- Compares NOAA (US) + Open-Meteo ensemble (international) forecasts against market prices
-- Normal distribution probability model per temperature bucket
+- Scans 30+ weather markets across 13 cities (today + tomorrow + day_after_tomorrow)
+- Fetches **119 ensemble members** from Open-Meteo Ensemble API (ECMWF + GFS + ICON)
+- Also fetches NOAA (US) + Open-Meteo multi-model point forecasts as fallback
+- **Ensemble probabilities** (preferred): each member votes for a bucket — non-parametric
+- **Normal distribution** (fallback): when <20 ensemble members available
 - Places LIMIT BUY orders at 85% of fair value (maker, zero fees)
-- Kelly criterion sizing: 40% fraction, $100 bankroll, $20 max/bucket, $60 total exposure
-- Min edge: 15% | Forecast buffer: 3°F / 2°C
+- Kelly criterion sizing: 25% fraction, $100 bankroll, $20 max/bucket, $60 total exposure
+- Min edge: 15% | Min market price: 5¢ | Forecast buffer: 3°F / 2°C
+- Same-day markets: real-time observation adjustment when current temp > forecast
 - Resolution: 1-2 days
 
 ### Cities
-- **US (°F, NOAA + Open-Meteo):** NYC, Chicago, Miami, Atlanta, Seattle, Dallas
-- **International (°C, Open-Meteo only):** London, Seoul, Paris, Toronto, Buenos Aires, Ankara, Wellington
-- Checked Feb 21: no other cities have Polymarket weather markets
+- **US (°F, NOAA + Open-Meteo + Ensemble):** NYC (KLGA), Chicago (KORD), Miami (KMIA), Atlanta (KATL), Seattle (KSEA), Dallas (KDFW)
+- **International (°C, Open-Meteo + Ensemble):** London (EGLC), Seoul (RKSS), Paris (LFPG), Toronto (CYYZ), Buenos Aires (SAEZ), Ankara (LTAC), Wellington (NZWN)
+- Station codes in parentheses = Weather Underground resolution stations
 
 ### Market Discovery
 - Slug-based: `highest-temperature-in-{city}-on-{month}-{day}-{year}`
 - Gamma API: `GET https://gamma-api.polymarket.com/events?slug={slug}`
+- 3 dates checked: today, tomorrow, day_after_tomorrow
 - `WEATHER_CITIES` in `markets.rs` must match `cities_us`/`cities_intl` in config.toml
 
 ## Architecture
@@ -57,12 +71,13 @@ All fixes implemented and verified this session:
 polymarket-bot/
 ├── src/
 │   ├── weather/                # PRIMARY STRATEGY
-│   │   ├── mod.rs              # WeatherConfig struct, City, get_cities(), us_city(), intl_city()
+│   │   ├── mod.rs              # WeatherConfig, City (with station codes), CityForecast (with ensemble_members)
 │   │   ├── strategy.rs         # WeatherStrategy: run_once(), check_and_mark_resolved(), Kelly sizing
-│   │   ├── forecast.rs         # Normal distribution probability per bucket
-│   │   ├── markets.rs          # WEATHER_CITIES list, slug generation, Gamma API discovery
+│   │   ├── forecast.rs         # calculate_probabilities() + calculate_probabilities_ensemble()
+│   │   ├── markets.rs          # WEATHER_CITIES list, slug generation, 3-day Gamma API discovery
 │   │   ├── noaa.rs             # NOAA API (api.weather.gov) — US cities
-│   │   └── open_meteo.rs       # Open-Meteo 3-model ensemble — all cities
+│   │   ├── open_meteo.rs       # Open-Meteo multi-model + fetch_ensemble() (119 members)
+│   │   └── observations.rs     # Real-time METAR observations for same-day markets
 │   ├── api/client.rs           # PolymarketClient (Gamma + CLOB)
 │   ├── auth/mod.rs             # L2 HMAC + EIP-712 signing
 │   ├── orders/mod.rs           # place_order() → returns JSON with orderID
@@ -83,18 +98,23 @@ pub struct WeatherTrade {
     timestamp, market_question, bucket_label, city,
     our_probability, market_price, edge, side,
     shares, price, cost, dry_run,
-    resolved: bool,     // true when market closed (Gamma API)
-    filled: bool,       // always false (no fill confirmation)
-    order_id: Option<String>,  // from CLOB response
+    resolved: bool,              // true when market closed (Gamma API)
+    filled: bool,                // always false (no fill confirmation)
+    order_id: Option<String>,    // from CLOB response
+    market_slug: Option<String>, // for reliable slug-based resolution
 }
 ```
 
 ### run_once() flow
-1. `check_and_mark_resolved()` — queries Gamma API for closed markets, frees exposure
-2. Discover 26 weather markets via slug patterns
-3. Fetch forecasts (NOAA + Open-Meteo) for 13 cities × 2 days
-4. For each bucket: dedup check → buffer check → edge check → Kelly sizing → order
-5. `save_trade_log()` after each successful trade
+1. `check_and_mark_resolved()` — queries Gamma API by slug for closed markets, frees exposure
+2. Discover 30+ weather markets via slug patterns (3 dates × 13 cities)
+3. Fetch forecasts (NOAA + Open-Meteo + Ensemble) for 13 cities × 3 days
+4. For each market:
+   a. Same-day? → fetch current observation, adjust forecast if current > forecast high
+   b. Log resolution station (WUnderground code)
+   c. Use ensemble probabilities (119 members) or fall back to normal distribution
+5. For each bucket: min price check → dedup → buffer check → edge check → Kelly sizing → order
+6. `save_trade_log()` after each successful trade (with market_slug)
 
 ### Deduplication
 - `placed_this_session: HashSet<String>` — keys are `"question|bucket"`
