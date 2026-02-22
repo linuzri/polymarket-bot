@@ -35,6 +35,8 @@ pub struct WeatherTrade {
     pub filled: bool,
     #[serde(default)]
     pub order_id: Option<String>,
+    #[serde(default)]
+    pub market_slug: Option<String>,
 }
 
 /// Weather strategy runner
@@ -145,28 +147,52 @@ impl WeatherStrategy {
                 continue;
             }
 
-            // Check if market is closed via Gamma API
-            // Use first 30 chars of question as search term
-            let search_term = if trade.market_question.len() > 30 {
-                &trade.market_question[..30]
+            // Check if market is closed via Gamma API using slug (reliable)
+            // Fall back to question substring matching if no slug available
+            let resolved = if let Some(ref slug) = trade.market_slug {
+                let url = format!(
+                    "https://gamma-api.polymarket.com/events?slug={}&closed=true",
+                    slug
+                );
+                match self.http.get(&url).send().await {
+                    Ok(resp) => {
+                        match resp.json::<Vec<serde_json::Value>>().await {
+                            Ok(events) => !events.is_empty(),
+                            Err(_) => false,
+                        }
+                    }
+                    Err(_) => false,
+                }
             } else {
-                &trade.market_question
+                // Legacy fallback: substring match on question text
+                let search_term = if trade.market_question.len() > 30 {
+                    &trade.market_question[..30]
+                } else {
+                    &trade.market_question
+                };
+                let url = format!(
+                    "https://gamma-api.polymarket.com/markets?closed=true&limit=1&question={}",
+                    search_term.replace(' ', "%20").replace('?', "%3F")
+                );
+                match self.http.get(&url).send().await {
+                    Ok(resp) => {
+                        match resp.text().await {
+                            Ok(text) => {
+                                let check_len = 50.min(trade.market_question.len());
+                                text.contains(&trade.market_question[..check_len]) && text.len() > 10
+                            }
+                            Err(_) => false,
+                        }
+                    }
+                    Err(_) => false,
+                }
             };
 
-            let url = format!(
-                "https://gamma-api.polymarket.com/markets?closed=true&limit=1&question={}",
-                search_term.replace(' ', "%20").replace('?', "%3F")
-            );
-
-            if let Ok(resp) = self.http.get(&url).send().await {
-                if let Ok(text) = resp.text().await {
-                    if text.contains(&trade.market_question[..50.min(trade.market_question.len())]) && text.len() > 10 {
-                        trade.resolved = true;
-                        self.total_exposure -= trade.cost;
-                        info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
-                        changed = true;
-                    }
-                }
+            if resolved {
+                trade.resolved = true;
+                self.total_exposure -= trade.cost;
+                info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
+                changed = true;
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -449,6 +475,7 @@ impl WeatherStrategy {
                         resolved: false,
                         filled: false,
                         order_id: captured_order_id,
+                        market_slug: Some(market.slug.clone()),
                     };
 
                     // Telegram notification
@@ -646,6 +673,7 @@ impl WeatherStrategy {
             resolved: trade.resolved,
             filled: trade.filled,
             order_id: trade.order_id.clone(),
+            market_slug: trade.market_slug.clone(),
         });
 
         let json = serde_json::to_string_pretty(&all_trades)?;
