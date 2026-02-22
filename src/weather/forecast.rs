@@ -191,6 +191,7 @@ mod tests {
             unit: TempUnit::Fahrenheit,
             std_dev: 3.0,
             model_temps: HashMap::new(),
+            ensemble_members: None,
         };
 
         let buckets = vec![
@@ -226,6 +227,7 @@ mod tests {
             unit: TempUnit::Fahrenheit,
             std_dev: 2.5,
             model_temps,
+            ensemble_members: None,
         };
 
         let buckets = vec![
