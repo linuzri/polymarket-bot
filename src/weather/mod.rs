@@ -2,6 +2,7 @@ pub mod noaa;
 pub mod open_meteo;
 pub mod forecast;
 pub mod markets;
+pub mod observations;
 pub mod strategy;
 
 use std::collections::HashMap;
@@ -37,6 +38,12 @@ pub struct WeatherConfig {
     pub kelly_bankroll: f64,
     #[serde(default = "default_noaa_warm_bias_f")]
     pub noaa_warm_bias_f: f64,
+    #[serde(default = "default_open_meteo_bias_f")]
+    pub open_meteo_bias_f: f64,
+    #[serde(default = "default_open_meteo_bias_c")]
+    pub open_meteo_bias_c: f64,
+    #[serde(default = "default_min_market_price")]
+    pub min_market_price: f64,
 }
 
 impl Default for WeatherConfig {
@@ -54,6 +61,9 @@ impl Default for WeatherConfig {
             forecast_buffer_c: 2.0,
             kelly_bankroll: 100.0,
             noaa_warm_bias_f: 1.0,
+            open_meteo_bias_f: 0.0,
+            open_meteo_bias_c: 0.0,
+            min_market_price: 0.05,
         }
     }
 }
@@ -66,6 +76,9 @@ fn default_max_total_exposure() -> f64 { 50.0 }
 fn default_kelly_fraction() -> f64 { 0.25 }
 fn default_kelly_bankroll() -> f64 { 100.0 }
 fn default_noaa_warm_bias_f() -> f64 { 1.0 }
+fn default_open_meteo_bias_f() -> f64 { 0.0 }
+fn default_open_meteo_bias_c() -> f64 { 0.0 }
+fn default_min_market_price() -> f64 { 0.05 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()
@@ -84,6 +97,7 @@ pub struct City {
     pub lat: f64,
     pub lon: f64,
     pub unit: TempUnit,
+    pub wunderground_station: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -120,30 +134,30 @@ pub fn get_cities(config: &WeatherConfig) -> Vec<City> {
 }
 
 fn us_city(name: &str) -> Option<City> {
-    let (lat, lon) = match name.to_lowercase().as_str() {
-        "nyc" | "new york" => (40.7128, -74.0060),
-        "chicago" => (41.8781, -87.6298),
-        "miami" => (25.7617, -80.1918),
-        "atlanta" => (33.7490, -84.3880),
-        "seattle" => (47.6062, -122.3321),
-        "dallas" => (32.7767, -96.7970),
+    let (lat, lon, station) = match name.to_lowercase().as_str() {
+        "nyc" | "new york" => (40.7128, -74.0060, "KLGA"),
+        "chicago" => (41.8781, -87.6298, "KORD"),
+        "miami" => (25.7617, -80.1918, "KMIA"),
+        "atlanta" => (33.7490, -84.3880, "KATL"),
+        "seattle" => (47.6062, -122.3321, "KSEA"),
+        "dallas" => (32.7767, -96.7970, "KDFW"),
         _ => return None,
     };
-    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Fahrenheit })
+    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Fahrenheit, wunderground_station: Some(station.to_string()) })
 }
 
 fn intl_city(name: &str) -> Option<City> {
-    let (lat, lon) = match name.to_lowercase().as_str() {
-        "london" => (51.5074, -0.1278),
-        "seoul" => (37.5665, 126.9780),
-        "paris" => (48.8566, 2.3522),
-        "toronto" => (43.6532, -79.3832),
-        "buenos-aires" | "buenos aires" => (-34.6037, -58.3816),
-        "ankara" => (39.9334, 32.8597),
-        "wellington" => (-41.2924, 174.7787),
+    let (lat, lon, station) = match name.to_lowercase().as_str() {
+        "london" => (51.5074, -0.1278, Some("EGLC")),
+        "seoul" => (37.5665, 126.9780, Some("RKSS")),
+        "paris" => (48.8566, 2.3522, Some("LFPG")),
+        "toronto" => (43.6532, -79.3832, Some("CYYZ")),
+        "buenos-aires" | "buenos aires" => (-34.6037, -58.3816, Some("SAEZ")),
+        "ankara" => (39.9334, 32.8597, Some("LTAC")),
+        "wellington" => (-41.2924, 174.7787, Some("NZWN")),
         _ => return None,
     };
-    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Celsius })
+    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Celsius, wunderground_station: station.map(String::from) })
 }
 
 /// Forecast result for a single city/date
@@ -157,6 +171,8 @@ pub struct CityForecast {
     pub std_dev: f64,
     /// Per-model temperatures (e.g. "best_match" -> 42.5, "gfs_seamless" -> 43.1)
     pub model_temps: HashMap<String, f64>,
+    /// Ensemble member temperatures (if available, used for non-parametric probability)
+    pub ensemble_members: Option<Vec<f64>>,
 }
 
 /// Convert Celsius to Fahrenheit

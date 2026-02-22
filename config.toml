@@ -32,9 +32,12 @@ scan_interval_secs = 1800
 min_edge = 0.15
 max_per_bucket = 20.0
 max_total_exposure = 60.0   # Allow up to 3 concurrent positions across different cities
-kelly_fraction = 0.40
+kelly_fraction = 0.25       # Was 0.40. Quarter-Kelly: industry standard for prediction markets
 kelly_bankroll = 100.0      # Actual capital for Kelly sizing (separate from exposure cap)
 noaa_warm_bias_f = 1.0      # Empirical warm bias correction for NOAA forecasts (°F)
+open_meteo_bias_f = 0.0     # Open-Meteo raw model bias correction (°F). Set to 0 = no correction.
+open_meteo_bias_c = 0.0     # Open-Meteo raw model bias correction (°C). Set to 0 = no correction.
+min_market_price = 0.05     # Skip buckets priced below 5¢ — model unreliable in tails
 # Minimum degrees between forecast and bucket threshold to avoid borderline bets
 forecast_buffer_f = 3.0   # °F for US cities
 forecast_buffer_c = 2.0   # °C for international cities

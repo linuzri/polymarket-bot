@@ -92,7 +92,8 @@ pub async fn discover_weather_markets(http: &reqwest::Client) -> Result<Vec<Weat
 
     let today = Utc::now().date_naive();
     let tomorrow = today + chrono::Duration::days(1);
-    let dates = [today, tomorrow];
+    let day_after = today + chrono::Duration::days(2);
+    let dates = [today, tomorrow, day_after];
 
     let mut weather_markets = Vec::new();
 

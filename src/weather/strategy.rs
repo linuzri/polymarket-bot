@@ -64,10 +64,11 @@ impl WeatherStrategy {
             info!("Loaded {} existing position keys (dedup)", existing_keys.len());
         }
 
+        let open_meteo = OpenMeteoClient::new(config.open_meteo_bias_f, config.open_meteo_bias_c);
         Self {
             config,
             noaa: NoaaClient::new(),
-            open_meteo: OpenMeteoClient::new(),
+            open_meteo,
             notifier: TelegramNotifier::new(),
             http: reqwest::Client::builder()
                 .user_agent("polymarket-weather-bot/1.0")
@@ -216,18 +217,63 @@ impl WeatherStrategy {
 
             // Find matching forecast
             let forecast = match self.find_matching_forecast(market, &forecasts) {
-                Some(f) => f,
+                Some(f) => f.clone(),
                 None => {
                     debug!("No matching forecast for market: {}", market.question);
                     continue;
                 }
             };
 
-            // Calculate probabilities for each bucket
-            let probs = forecast::calculate_probabilities(
-                &forecast,
-                &market.buckets.iter().map(|b| b.temp_bucket.clone()).collect::<Vec<_>>(),
-            );
+            // For same-day markets: fetch current observation as a sanity check (Task 4)
+            let mut adjusted_forecast = forecast.clone();
+            let market_date = market.date.as_deref().unwrap_or("");
+            let today = Utc::now().format("%Y-%m-%d").to_string();
+            if market_date == today {
+                if let Some(city_name) = market.city.as_deref() {
+                    let city_obj = cities.iter().find(|c| c.name == city_name);
+                    if let Some(city) = city_obj {
+                        match super::observations::fetch_current_temp(&self.http, city).await {
+                            Ok(Some((current_temp, _obs_time))) => {
+                                if current_temp > adjusted_forecast.high_temp {
+                                    info!(
+                                        "OBSERVATION ADJUSTMENT: {} current {:.1} > forecast high {:.1}",
+                                        city_name, current_temp, adjusted_forecast.high_temp
+                                    );
+                                    adjusted_forecast.high_temp = current_temp;
+                                    adjusted_forecast.std_dev *= 0.6; // Tighter uncertainty on same-day
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                debug!("Failed to fetch observation for {}: {}", city_name, e);
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+            }
+
+            // Log resolution station if available (Task 5)
+            if let Some(city_name) = market.city.as_deref() {
+                if let Some(city) = cities.iter().find(|c| c.name == city_name) {
+                    if let Some(station) = &city.wunderground_station {
+                        info!("  Resolution station: {} (Weather Underground)", station);
+                    }
+                }
+            }
+
+            // Calculate probabilities — prefer ensemble when available (Task 2)
+            let buckets_vec: Vec<_> = market.buckets.iter().map(|b| b.temp_bucket.clone()).collect();
+            let probs = if let Some(ref members) = adjusted_forecast.ensemble_members {
+                if members.len() >= 20 {
+                    info!("Using {} ensemble members for probability calculation", members.len());
+                    forecast::calculate_probabilities_ensemble(members, &buckets_vec)
+                } else {
+                    forecast::calculate_probabilities(&adjusted_forecast, &buckets_vec)
+                }
+            } else {
+                forecast::calculate_probabilities(&adjusted_forecast, &buckets_vec)
+            };
 
             // Evaluate each bucket for edge
             for bucket in &market.buckets {
@@ -242,6 +288,14 @@ impl WeatherStrategy {
 
                 let market_price = bucket.yes_price;
                 if market_price <= 0.0 || market_price >= 1.0 {
+                    continue;
+                }
+
+                // Minimum market price filter — skip buckets priced below threshold
+                // When market prices <5¢, our model is unreliable in the tails
+                if market_price < self.config.min_market_price {
+                    debug!("SKIP: {} market price {:.3} below minimum {:.3}",
+                        bucket.label, market_price, self.config.min_market_price);
                     continue;
                 }
 
@@ -494,6 +548,21 @@ impl WeatherStrategy {
                     Err(e) => {
                         warn!("NOAA forecast failed for {}: {} (continuing with Open-Meteo only)", city.name, e);
                     }
+                }
+            }
+
+            // Fetch ensemble data and attach to matching forecasts (Task 2)
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            match self.open_meteo.fetch_ensemble(city).await {
+                Ok(ensemble_data) => {
+                    for forecast in &mut forecasts {
+                        if let Some(members) = ensemble_data.get(&forecast.date) {
+                            forecast.ensemble_members = Some(members.clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Ensemble fetch failed for {}: {} (falling back to normal distribution)", city.name, e);
                 }
             }
 

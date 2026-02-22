@@ -139,6 +139,44 @@ pub fn calculate_probabilities(
     probs
 }
 
+/// Calculate bucket probabilities from ensemble members (non-parametric).
+/// Each member "votes" for a bucket. The fraction of members in each bucket
+/// IS the probability estimate. This naturally captures flow-dependent uncertainty.
+pub fn calculate_probabilities_ensemble(
+    members: &[f64],
+    buckets: &[TempBucket],
+) -> HashMap<String, f64> {
+    let mut probs = HashMap::new();
+    let n = members.len() as f64;
+
+    if n == 0.0 {
+        return probs;
+    }
+
+    for bucket in buckets {
+        let count = members.iter()
+            .filter(|&&temp| temp >= bucket.min_temp - 0.5 && temp <= bucket.max_temp + 0.5)
+            .count();
+        let prob = count as f64 / n;
+        probs.insert(bucket.label.clone(), prob);
+
+        debug!(
+            "  Bucket '{}': {}/{} members = P={:.4}",
+            bucket.label, count, members.len(), prob
+        );
+    }
+
+    // Normalize if members didn't all land in known buckets
+    let total: f64 = probs.values().sum();
+    if total > 0.0 && (total - 1.0).abs() > 0.01 {
+        for v in probs.values_mut() {
+            *v /= total;
+        }
+    }
+
+    probs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

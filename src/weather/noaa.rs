@@ -118,6 +118,7 @@ impl NoaaClient {
                 unit,
                 std_dev,
                 model_temps: std::collections::HashMap::new(),
+                ensemble_members: None,
             });
 
             // Only need first few days

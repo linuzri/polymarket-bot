@@ -9,6 +9,8 @@ use super::{City, CityForecast, TempUnit};
 /// Fetches 4 models (best_match, GFS, ICON, ECMWF) in a single API call
 pub struct OpenMeteoClient {
     http: reqwest::Client,
+    bias_f: f64,
+    bias_c: f64,
 }
 
 /// Multi-model response from api.open-meteo.com
@@ -38,20 +40,20 @@ const MODEL_KEYS: &[(&str, &str)] = &[
 ];
 
 impl OpenMeteoClient {
-    pub fn new() -> Self {
+    pub fn new(bias_f: f64, bias_c: f64) -> Self {
         let http = reqwest::Client::builder()
             .user_agent("polymarket-weather-bot/1.0")
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .unwrap();
-        Self { http }
+        Self { http, bias_f, bias_c }
     }
 
     /// Fetch multi-model forecast for a city
     pub async fn fetch_forecast(&self, city: &City) -> Result<Vec<CityForecast>> {
         // Try multi-model API first
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=2&models=gfs_seamless,icon_seamless,ecmwf_ifs025",
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=gfs_seamless,icon_seamless,ecmwf_ifs025",
             city.lat, city.lon
         );
 
@@ -84,7 +86,7 @@ impl OpenMeteoClient {
             TempUnit::Celsius => "",
         };
         let fallback_url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=2{}",
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3{}",
             city.lat, city.lon, unit_param
         );
 
@@ -110,8 +112,8 @@ impl OpenMeteoClient {
         };
 
         let bias = match unit {
-            TempUnit::Fahrenheit => 1.0,  // +1.0 degF station warm bias
-            TempUnit::Celsius => 0.5,     // +0.5 degC station warm bias
+            TempUnit::Fahrenheit => self.bias_f,
+            TempUnit::Celsius => self.bias_c,
         };
 
         let mut results = Vec::new();
@@ -163,6 +165,7 @@ impl OpenMeteoClient {
                 unit,
                 std_dev,
                 model_temps,
+                ensemble_members: None,
             });
         }
 
@@ -171,6 +174,63 @@ impl OpenMeteoClient {
         }
 
         results
+    }
+
+    /// Fetch ensemble member forecasts for probability estimation
+    /// Returns a map of date -> Vec<f64> (individual member max temperatures)
+    pub async fn fetch_ensemble(&self, city: &City) -> Result<HashMap<String, Vec<f64>>> {
+        let url = format!(
+            "https://ensemble-api.open-meteo.com/v1/ensemble?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=ecmwf_ifs025,gfs_seamless,icon_seamless",
+            city.lat, city.lon
+        );
+
+        debug!("Open-Meteo ensemble request for {}: {}", city.name, url);
+        let resp = self.http.get(&url).send().await
+            .context("Ensemble API request failed")?;
+        let body: serde_json::Value = resp.json().await
+            .context("Failed to parse ensemble response")?;
+
+        let mut result: HashMap<String, Vec<f64>> = HashMap::new();
+
+        if let Some(daily) = body.get("daily") {
+            let times: Vec<String> = daily.get("time")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+
+            // Collect all member keys (handles both single-model and multi-model formats)
+            // Single model: temperature_2m_max_member01, temperature_2m_max_member02, ...
+            // Multi model: temperature_2m_max_member01_ecmwf_ifs025_ensemble, ...
+            let member_keys: Vec<String> = daily.as_object()
+                .map(|obj| obj.keys()
+                    .filter(|k| k.contains("member"))
+                    .cloned()
+                    .collect())
+                .unwrap_or_default();
+
+            for (i, date) in times.iter().enumerate() {
+                let mut members: Vec<f64> = Vec::new();
+
+                for key in &member_keys {
+                    if let Some(arr) = daily.get(key).and_then(|v| v.as_array()) {
+                        if let Some(temp) = arr.get(i).and_then(|v| v.as_f64()) {
+                            let converted = match city.unit {
+                                TempUnit::Fahrenheit => super::c_to_f(temp),
+                                TempUnit::Celsius => temp,
+                            };
+                            members.push(converted);
+                        }
+                    }
+                }
+
+                if !members.is_empty() {
+                    info!("  {} {} | {} ensemble members fetched", city.name, date, members.len());
+                    result.insert(date.clone(), members);
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Fallback: parse single-model response (backward compat)
@@ -196,6 +256,7 @@ impl OpenMeteoClient {
                 unit,
                 std_dev,
                 model_temps: HashMap::new(),
+                ensemble_members: None,
             });
 
             if results.len() >= 4 {
