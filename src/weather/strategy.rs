@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Utc, Timelike};
+use chrono::{Utc, Timelike, Datelike};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn, error, debug};
@@ -37,6 +37,21 @@ pub struct WeatherTrade {
     pub order_id: Option<String>,
     #[serde(default)]
     pub market_slug: Option<String>,
+    /// Whether the order was confirmed filled on CLOB
+    #[serde(default)]
+    pub fill_confirmed: bool,
+    /// Outcome: "WIN", "LOSS", "NO_FILL", or None if unresolved
+    #[serde(default)]
+    pub outcome: Option<String>,
+    /// Profit/loss in USDC
+    #[serde(default)]
+    pub pnl: Option<f64>,
+    /// Actual high temperature from Weather Underground resolution
+    #[serde(default)]
+    pub resolution_temp: Option<f64>,
+    /// Token ID for CLOB fill checking
+    #[serde(default)]
+    pub token_id: Option<String>,
 }
 
 /// Weather strategy runner
@@ -191,6 +206,69 @@ impl WeatherStrategy {
             if resolved {
                 trade.resolved = true;
                 self.total_exposure -= trade.cost;
+
+                // Check if order actually filled on CLOB
+                let fill_confirmed = if let Some(ref token_id) = trade.token_id {
+                    let maker_addr = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
+                    let url = format!(
+                        "https://clob.polymarket.com/trades?maker={}&market={}",
+                        maker_addr, token_id
+                    );
+                    match self.http.get(&url).send().await {
+                        Ok(resp) => {
+                            match resp.json::<Vec<serde_json::Value>>().await {
+                                Ok(trades_list) => !trades_list.is_empty(),
+                                Err(_) => false,
+                            }
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                };
+                trade.fill_confirmed = fill_confirmed;
+
+                // Determine outcome
+                if !fill_confirmed {
+                    trade.outcome = Some("NO_FILL".to_string());
+                    trade.pnl = Some(0.0);
+                    info!("NO_FILL (order never matched): {} | {}", trade.market_question, trade.bucket_label);
+                } else {
+                    // Check if our bucket won by looking at outcomePrices from Gamma API
+                    let won = if let Some(ref slug) = trade.market_slug {
+                        self.check_bucket_won(slug, &trade.bucket_label).await
+                    } else {
+                        None
+                    };
+
+                    match won {
+                        Some(true) => {
+                            let pnl = trade.shares - trade.cost;
+                            trade.outcome = Some("WIN".to_string());
+                            trade.pnl = Some(pnl);
+                            info!("WIN +${:.2}: {} | {}", pnl, trade.market_question, trade.bucket_label);
+                        }
+                        Some(false) => {
+                            trade.outcome = Some("LOSS".to_string());
+                            trade.pnl = Some(-trade.cost);
+                            info!("LOSS -${:.2}: {} | {}", trade.cost, trade.market_question, trade.bucket_label);
+                        }
+                        None => {
+                            // Could not determine outcome — mark resolved but unknown
+                            trade.outcome = Some("UNKNOWN".to_string());
+                            trade.pnl = None;
+                            warn!("RESOLVED but outcome unknown: {} | {}", trade.market_question, trade.bucket_label);
+                        }
+                    }
+                }
+
+                // Try to fetch resolution temperature from Weather Underground
+                if let Some(ref slug) = trade.market_slug {
+                    if let Some(temp) = self.fetch_resolution_temp(slug, &trade.city).await {
+                        trade.resolution_temp = Some(temp);
+                    }
+                }
+
                 info!("Freed ${:.2} exposure (resolved): {} | {}", trade.cost, trade.market_question, trade.bucket_label);
                 changed = true;
             }
@@ -203,6 +281,170 @@ impl WeatherStrategy {
                 let _ = std::fs::write("strategy_trades.json", json);
             }
         }
+    }
+
+    /// Check if our specific bucket won by querying Gamma API for outcome prices
+    async fn check_bucket_won(&self, slug: &str, bucket_label: &str) -> Option<bool> {
+        // Get all markets for this event
+        let url = format!(
+            "https://gamma-api.polymarket.com/markets?slug={}&closed=true",
+            slug
+        );
+        let resp = self.http.get(&url).send().await.ok()?;
+        let markets: Vec<serde_json::Value> = resp.json().await.ok()?;
+
+        for market in &markets {
+            let outcomes = market.get("outcomes")
+                .and_then(|v| v.as_str())
+                .unwrap_or("[]");
+            let outcome_prices = market.get("outcomePrices")
+                .and_then(|v| v.as_str())
+                .unwrap_or("[]");
+
+            let outcomes: Vec<String> = serde_json::from_str(outcomes).unwrap_or_default();
+            let prices: Vec<String> = serde_json::from_str(outcome_prices).unwrap_or_default();
+
+            // Find our bucket in outcomes
+            for (i, outcome) in outcomes.iter().enumerate() {
+                if outcome == bucket_label {
+                    if let Some(price_str) = prices.get(i) {
+                        if let Ok(price) = price_str.parse::<f64>() {
+                            // Price = 1.0 means this outcome won, 0.0 means it lost
+                            return Some(price > 0.5);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Fetch the actual resolution temperature from Weather Underground
+    async fn fetch_resolution_temp(&self, slug: &str, city: &str) -> Option<f64> {
+        // Extract date from slug (e.g. "highest-temperature-in-seoul-on-february-23-2026")
+        let cities_config = get_cities(&self.config);
+        let city_obj = cities_config.iter().find(|c| c.name == city)?;
+        let station = city_obj.wunderground_station.as_deref()?;
+
+        // Parse date from slug
+        let date = self.parse_date_from_slug(slug)?;
+
+        let url = format!(
+            "https://api.weather.com/v2/pws/history/daily?stationId={}&format=json&units=e&date={}",
+            station, date.replace("-", "")
+        );
+        // Weather Underground API requires an API key; skip if not available
+        // For now, return None — can be enhanced later with WU API key
+        debug!("Resolution temp lookup skipped (no WU API key): {} {}", station, date);
+        None
+    }
+
+    /// Parse a date string from a market slug
+    fn parse_date_from_slug(&self, slug: &str) -> Option<String> {
+        // Pattern: "highest-temperature-in-CITY-on-MONTH-DAY-YEAR"
+        let months = [
+            ("january", "01"), ("february", "02"), ("march", "03"), ("april", "04"),
+            ("may", "05"), ("june", "06"), ("july", "07"), ("august", "08"),
+            ("september", "09"), ("october", "10"), ("november", "11"), ("december", "12"),
+        ];
+        for (name, num) in &months {
+            if let Some(pos) = slug.find(name) {
+                let after = &slug[pos + name.len()..];
+                let parts: Vec<&str> = after.split('-').filter(|s| !s.is_empty()).collect();
+                if parts.len() >= 2 {
+                    let day = parts[0].parse::<u32>().ok()?;
+                    let year = parts[1].parse::<u32>().ok()?;
+                    return Some(format!("{}-{}-{:02}", year, num, day));
+                }
+            }
+        }
+        None
+    }
+
+    /// Weekly P&L summary — runs Sunday midnight UTC
+    async fn weekly_summary(&self) {
+        let all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let now = Utc::now();
+        let week_ago = now - chrono::Duration::days(7);
+
+        let recent: Vec<&WeatherTrade> = all_trades.iter()
+            .filter(|t| !t.dry_run && t.resolved)
+            .filter(|t| {
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
+                    ts.with_timezone(&Utc) >= week_ago
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        if recent.is_empty() {
+            self.notifier.send("📊 WEEKLY SUMMARY\nNo resolved trades this week.").await;
+            return;
+        }
+
+        let total = recent.len();
+        let wins: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("WIN")).collect();
+        let losses: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("LOSS")).collect();
+        let no_fills: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("NO_FILL")).collect();
+        let win_count = wins.len();
+        let loss_count = losses.len();
+
+        let total_pnl: f64 = recent.iter()
+            .filter_map(|t| t.pnl)
+            .sum();
+
+        let win_rate = if win_count + loss_count > 0 {
+            (win_count as f64 / (win_count + loss_count) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Best and worst trades
+        let best = recent.iter()
+            .filter(|t| t.pnl.is_some())
+            .max_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
+        let worst = recent.iter()
+            .filter(|t| t.pnl.is_some())
+            .min_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
+
+        // Average our_prob on wins vs losses
+        let avg_prob_wins = if !wins.is_empty() {
+            wins.iter().map(|t| t.our_probability).sum::<f64>() / wins.len() as f64
+        } else {
+            0.0
+        };
+        let avg_prob_losses = if !losses.is_empty() {
+            losses.iter().map(|t| t.our_probability).sum::<f64>() / losses.len() as f64
+        } else {
+            0.0
+        };
+
+        let mut msg = format!(
+            "📊 WEEKLY SUMMARY\nTrades: {} | Wins: {} | Losses: {} | No-Fill: {} | Win rate: {:.0}%\nP&L: {:+.2}",
+            total, win_count, loss_count, no_fills.len(), win_rate, total_pnl
+        );
+
+        if let Some(b) = best {
+            msg.push_str(&format!("\nBest: {} {} ({:+.2})", b.city, b.bucket_label, b.pnl.unwrap_or(0.0)));
+        }
+        if let Some(w) = worst {
+            msg.push_str(&format!("\nWorst: {} {} ({:+.2})", w.city, w.bucket_label, w.pnl.unwrap_or(0.0)));
+        }
+
+        if win_count > 0 || loss_count > 0 {
+            msg.push_str(&format!(
+                "\nAvg our_prob on wins: {:.2} | losses: {:.2}",
+                avg_prob_wins, avg_prob_losses
+            ));
+        }
+
+        info!("{}", msg);
+        self.notifier.send(&msg).await;
     }
 
     /// Run a single scan cycle
@@ -502,6 +744,11 @@ impl WeatherStrategy {
                         filled: false,
                         order_id: captured_order_id,
                         market_slug: Some(market.slug.clone()),
+                        fill_confirmed: false,
+                        outcome: None,
+                        pnl: None,
+                        resolution_temp: None,
+                        token_id: Some(bucket.token_id.clone()),
                     };
 
                     // Telegram notification
@@ -700,6 +947,11 @@ impl WeatherStrategy {
             filled: trade.filled,
             order_id: trade.order_id.clone(),
             market_slug: trade.market_slug.clone(),
+            fill_confirmed: trade.fill_confirmed,
+            outcome: trade.outcome.clone(),
+            pnl: trade.pnl,
+            resolution_temp: trade.resolution_temp,
+            token_id: trade.token_id.clone(),
         });
 
         let json = serde_json::to_string_pretty(&all_trades)?;
@@ -725,6 +977,8 @@ impl WeatherStrategy {
         );
         self.notifier.send(&startup_msg).await;
 
+        let mut last_weekly_summary_day: Option<u32> = None;
+
         loop {
             match self.run_once().await {
                 Ok(n) => {
@@ -735,6 +989,16 @@ impl WeatherStrategy {
                 Err(e) => {
                     error!("Weather scan error: {}", e);
                     println!("Weather scan error: {}. Retrying...", e);
+                }
+            }
+
+            // Weekly summary: Sunday midnight UTC (day_of_week = Sun, hour = 0)
+            let now = Utc::now();
+            if now.weekday() == chrono::Weekday::Sun && now.hour() == 0 {
+                let day_of_year = now.ordinal();
+                if last_weekly_summary_day != Some(day_of_year) {
+                    self.weekly_summary().await;
+                    last_weekly_summary_day = Some(day_of_year);
                 }
             }
 
