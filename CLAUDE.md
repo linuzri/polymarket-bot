@@ -3,12 +3,13 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** — uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Feb 22, 2026)
-- **Portfolio:** $119.29 USDC | All-time P/L: +$18.22 (on $100.27 deposit)
-- **Open Positions:** NONE — all weather resolved, Fed positions manually closed
+## Current Status (Feb 23, 2026)
+- **Portfolio:** ~$119 USDC | Exposure: $33.06/$60
+- **Open Positions:** Buenos Aires, Wellington (×2), Atlanta — resolving Feb 23-24
 - **PM2:** `polymarket-bot` ONLINE — continuous `weather` run_loop, scans every 30 min
-- **Telegram:** Trade alerts enabled (chat_id: 3588682)
+- **Telegram:** Trade alerts + weekly P&L summary (Sundays midnight UTC)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
+- **Roadmap:** WATCH & WAIT 2 weeks — see `memory/polymarket-roadmap.md`
 
 ### Feb 22 Upgrades (v2 — Major)
 
@@ -37,11 +38,20 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 | **3 missing cities** | buenos-aires, ankara, wellington added to `intl_city()` coordinates |
 | **Telegram** | Enabled in config.toml |
 
+### Feb 23 Upgrades (8 changes in one day)
+
+| Task | Detail |
+|------|--------|
+| **Narrow bucket filter** | `min_edge_narrow = 0.25` — single-temp buckets (e.g. "18°C") require higher edge. Ensemble overestimates tight ranges. |
+| **Min probability filter** | `min_our_probability = 0.60` — skip trades where model says <60%. Every winning trade had >0.75, every loss <0.60. |
+| **Outcome tracking** | `fill_confirmed`, `outcome` (WIN/LOSS/NO_FILL), `pnl`, `resolution_temp`, `token_id` on WeatherTrade. Queries CLOB trades API for fill confirmation. |
+| **Weekly Telegram summary** | `weekly_summary()` runs Sunday midnight UTC. Trades, W/L, win rate, P&L, best/worst, avg our_prob on wins vs losses. |
+| **Supabase key** | Updated to new `sb_secret_` format (old JWT keys deprecated by Supabase). |
+
 ### Known Limitations
-- `filled` field always false — no CLOB fill-confirmation endpoint
-- `order_id` captured from CLOB response but not used for fill tracking
 - No auto-redeem — PolymarketClient has no redeem/settle/merge methods
 - Legacy trades (pre-Feb 22) in strategy_trades.json have no `market_slug` — resolution falls back to substring matching
+- `resolution_temp` placeholder — needs Weather Underground API key for actual lookup
 
 ## Strategy: Weather Arbitrage
 - Scans 30+ weather markets across 13 cities (today + tomorrow + day_after_tomorrow)
@@ -99,9 +109,14 @@ pub struct WeatherTrade {
     our_probability, market_price, edge, side,
     shares, price, cost, dry_run,
     resolved: bool,              // true when market closed (Gamma API)
-    filled: bool,                // always false (no fill confirmation)
+    filled: bool,                // legacy field (always false)
     order_id: Option<String>,    // from CLOB response
     market_slug: Option<String>, // for reliable slug-based resolution
+    fill_confirmed: bool,        // CLOB trades API confirmation
+    outcome: Option<String>,     // "WIN", "LOSS", "NO_FILL", "UNKNOWN"
+    pnl: Option<f64>,            // profit/loss in USDC
+    resolution_temp: Option<f64>,// actual high temp (placeholder)
+    token_id: Option<String>,    // for CLOB fill checking
 }
 ```
 
@@ -113,7 +128,7 @@ pub struct WeatherTrade {
    a. Same-day? → fetch current observation, adjust forecast if current > forecast high
    b. Log resolution station (WUnderground code)
    c. Use ensemble probabilities (119 members) or fall back to normal distribution
-5. For each bucket: min price check → dedup → buffer check → edge check → Kelly sizing → order
+5. For each bucket: min price check → min probability (≥0.60) → dedup → buffer check → edge check (narrow buckets need 0.25) → Kelly sizing → order
 6. `save_trade_log()` after each successful trade (with market_slug)
 
 ### Deduplication

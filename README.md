@@ -2,18 +2,19 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Feb 22, 2026)
+## 🔴 Live Trading Status (Feb 23, 2026)
 
-- **Portfolio:** $119.29 USDC | All-time P/L: **+$18.22** (on $100.27 deposit)
+- **Portfolio:** ~$119 USDC | Exposure: $33.06/$60 | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
-- **Open Positions:** None — fully liquid
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
 - **PM2:** `polymarket-bot` **ONLINE** — continuous `weather` run_loop, scans every 30 min
-- **Cities:** 13 (6 US + 7 international) — all with coordinates, forecast sources + Weather Underground station codes
+- **Cities:** 13 (6 US + 7 international) — all with coordinates, forecast sources + WU station codes
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
 - **Best Trade:** Seoul Feb 21 — +$31.87 (266% return)
-- **Config:** 15% min edge, 25% Kelly, $20/bucket, $60 max exposure, 5¢ min market price
+- **Config:** 15% min edge (25% for narrow buckets), 60% min probability, 25% Kelly, $20/bucket, $60 max exposure, 5¢ min market price
+- **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API
+- **Weekly Summary:** Telegram every Sunday midnight UTC
 
 ## How It Works
 
