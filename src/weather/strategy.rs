@@ -365,6 +365,13 @@ impl WeatherStrategy {
                     continue;
                 }
 
+                // Minimum probability filter — skip low-confidence predictions
+                if our_prob < self.config.min_our_probability {
+                    debug!("SKIP: {} our_prob {:.3} below minimum {:.3}",
+                        bucket.label, our_prob, self.config.min_our_probability);
+                    continue;
+                }
+
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
 

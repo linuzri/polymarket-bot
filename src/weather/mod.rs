@@ -48,6 +48,10 @@ pub struct WeatherConfig {
     /// Ensemble tends to overestimate probability on tight ranges
     #[serde(default = "default_min_edge_narrow")]
     pub min_edge_narrow: f64,
+    /// Minimum model probability to place a trade — filters out lottery tickets
+    /// where ensemble says 25-50% but overestimates tail probability
+    #[serde(default = "default_min_our_probability")]
+    pub min_our_probability: f64,
 }
 
 impl Default for WeatherConfig {
@@ -69,6 +73,7 @@ impl Default for WeatherConfig {
             open_meteo_bias_c: 0.0,
             min_market_price: 0.05,
             min_edge_narrow: 0.25,
+            min_our_probability: 0.60,
         }
     }
 }
@@ -85,6 +90,7 @@ fn default_open_meteo_bias_f() -> f64 { 0.0 }
 fn default_open_meteo_bias_c() -> f64 { 0.0 }
 fn default_min_market_price() -> f64 { 0.05 }
 fn default_min_edge_narrow() -> f64 { 0.25 }
+fn default_min_our_probability() -> f64 { 0.60 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()
