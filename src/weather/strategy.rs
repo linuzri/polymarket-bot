@@ -368,7 +368,26 @@ impl WeatherStrategy {
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
 
-                if edge >= self.config.min_edge {
+                // Narrow bucket filter: single-temp buckets (e.g. "18°C") need higher edge
+                // because ensemble overestimates probability on tight ranges
+                let is_narrow = bucket.temp_bucket.min_temp.is_finite()
+                    && bucket.temp_bucket.max_temp.is_finite()
+                    && (bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp) <= 2.0;
+                let required_edge = if is_narrow {
+                    self.config.min_edge_narrow
+                } else {
+                    self.config.min_edge
+                };
+
+                if edge > self.config.min_edge && edge < required_edge && is_narrow {
+                    debug!(
+                        "NARROW SKIP: {} | {} | edge={:.3} < narrow_min={:.3} (range={:.1})",
+                        market.question, bucket.label, edge, required_edge,
+                        bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp
+                    );
+                }
+
+                if edge >= required_edge {
                     info!(
                         "EDGE FOUND: {} | {} | our={:.2} vs mkt={:.2} | edge={:.2}",
                         market.question, bucket.label, our_prob, market_price, edge

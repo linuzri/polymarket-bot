@@ -38,6 +38,7 @@ noaa_warm_bias_f = 1.0      # Empirical warm bias correction for NOAA forecasts 
 open_meteo_bias_f = 0.0     # Open-Meteo raw model bias correction (°F). Set to 0 = no correction.
 open_meteo_bias_c = 0.0     # Open-Meteo raw model bias correction (°C). Set to 0 = no correction.
 min_market_price = 0.05     # Skip buckets priced below 5¢ — model unreliable in tails
+min_edge_narrow = 0.25      # Higher edge required for single-temp / narrow buckets (e.g. "18°C" exactly)
 # Minimum degrees between forecast and bucket threshold to avoid borderline bets
 forecast_buffer_f = 3.0   # °F for US cities
 forecast_buffer_c = 2.0   # °C for international cities

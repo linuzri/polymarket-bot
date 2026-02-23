@@ -44,6 +44,10 @@ pub struct WeatherConfig {
     pub open_meteo_bias_c: f64,
     #[serde(default = "default_min_market_price")]
     pub min_market_price: f64,
+    /// Higher edge required for narrow/single-temperature buckets (e.g. "18°C" exactly)
+    /// Ensemble tends to overestimate probability on tight ranges
+    #[serde(default = "default_min_edge_narrow")]
+    pub min_edge_narrow: f64,
 }
 
 impl Default for WeatherConfig {
@@ -64,6 +68,7 @@ impl Default for WeatherConfig {
             open_meteo_bias_f: 0.0,
             open_meteo_bias_c: 0.0,
             min_market_price: 0.05,
+            min_edge_narrow: 0.25,
         }
     }
 }
@@ -79,6 +84,7 @@ fn default_noaa_warm_bias_f() -> f64 { 1.0 }
 fn default_open_meteo_bias_f() -> f64 { 0.0 }
 fn default_open_meteo_bias_c() -> f64 { 0.0 }
 fn default_min_market_price() -> f64 { 0.05 }
+fn default_min_edge_narrow() -> f64 { 0.25 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()
