@@ -2,14 +2,16 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Feb 23, 2026)
+## 🔴 Live Trading Status (Feb 26, 2026)
 
-- **Portfolio:** ~$119 USDC | Exposure: $33.06/$60 | All-time P/L: **+$18.22**
+- **Portfolio:** ~$119 USDC | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
 - **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
-- **PM2:** `polymarket-bot` **ONLINE** — continuous `weather` run_loop, scans every 30 min
+- **PM2:** `polymarket-bot` **ONLINE** — schedule-aware scanning aligned to weather model releases
 - **Cities:** 13 (6 US + 7 international) — all with coordinates, forecast sources + WU station codes
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
+- **Scan Timing:** 8 windows/day aligned to GFS/ECMWF model releases (15min post-publish) + 120min fallback
+- **Laddering:** ENABLED — $2 micro-bets across multiple cheap adjacent buckets (≤15¢) for diversification
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
 - **Best Trade:** Seoul Feb 21 — +$31.87 (266% return)
 - **Config:** 15% min edge (25% for narrow buckets), 60% min probability, 25% Kelly, $20/bucket, $60 max exposure, 5¢ min market price
@@ -19,7 +21,7 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 ## How It Works
 
 ```
-Every 30 minutes (PM2 run_loop):
+Schedule-aware scan loop (8 windows/day aligned to GFS/ECMWF model releases):
 1. Discover weather markets → 30+ markets across 13 cities (today + tomorrow + day after)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (all) + 119 ensemble members
 3. Same-day markets → fetch real-time observations, adjust forecast if needed
@@ -28,7 +30,8 @@ Every 30 minutes (PM2 run_loop):
 6. Filter → Skip buckets below 5¢ (model unreliable in tails)
 7. Size positions → Kelly criterion (25% fraction, $20 max per bucket)
 8. Place limit orders → BUY YES at 85% of fair value (maker, zero fees)
-9. Resolution → 1-2 days, slug-based Gamma API detection
+9. Laddering pass → $2 micro-bets on cheap adjacent buckets (≤15¢) with positive edge
+10. Resolution → 1-2 days, slug-based Gamma API detection
 ```
 
 ## Why Weather Markets?
@@ -102,6 +105,19 @@ open_meteo_bias_f = 0.0      # Open-Meteo bias correction (°F) — 0 = raw mode
 open_meteo_bias_c = 0.0      # Open-Meteo bias correction (°C)
 forecast_buffer_f = 3.0      # °F buffer from bucket threshold
 forecast_buffer_c = 2.0      # °C buffer from bucket threshold
+
+# Laddering — micro-position diversification (v3)
+enable_laddering = true
+ladder_amount_per_bucket = 2.0   # $2 per bucket in ladder mode
+ladder_max_buckets = 5           # Max buckets per market
+ladder_min_model_prob = 0.05     # Min 5% model probability
+ladder_max_market_price = 0.15   # Only buy buckets ≤15¢
+
+[weather.scan_schedule]
+# Aligned to GFS/ECMWF model release availability times (UTC)
+model_release_hours = [3, 5, 9, 11, 15, 17, 21, 23]
+fallback_interval_minutes = 120
+post_release_delay_minutes = 15
 ```
 
 ## Probability Models
