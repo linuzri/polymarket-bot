@@ -12,7 +12,34 @@ use super::forecast::{self, TempBucket};
 use super::markets::{self, WeatherMarket};
 use super::noaa::NoaaClient;
 use super::open_meteo::OpenMeteoClient;
-use super::{City, CityForecast, TempUnit, WeatherConfig, get_cities};
+use super::{City, CityForecast, ScanSchedule, TempUnit, WeatherConfig, get_cities};
+
+/// Calculate the next scan time based on model release schedule
+fn next_scan_time(schedule: &ScanSchedule) -> chrono::DateTime<Utc> {
+    let now = Utc::now();
+    let current_hour = now.hour();
+    let current_minute = now.minute();
+    let target_minute = schedule.post_release_delay_minutes as u32;
+
+    // Find the next model release + delay
+    for &hour in &schedule.model_release_hours {
+        if hour > current_hour || (hour == current_hour && target_minute > current_minute) {
+            if let Some(dt) = now.date_naive()
+                .and_hms_opt(hour, target_minute, 0)
+            {
+                return dt.and_utc();
+            }
+        }
+    }
+
+    // Wrap to first release of next day
+    let first_hour = schedule.model_release_hours.first().copied().unwrap_or(3);
+    let tomorrow = now.date_naive() + chrono::Duration::days(1);
+    tomorrow
+        .and_hms_opt(first_hour, target_minute, 0)
+        .unwrap()
+        .and_utc()
+}
 
 /// Trade log entry
 #[derive(Debug, Serialize, Deserialize)]
@@ -772,6 +799,145 @@ impl WeatherStrategy {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             }
+
+            // === LADDERING PASS ===
+            // After the main edge-detection pass, do a second pass for micro-positions
+            if self.config.enable_laddering {
+                // Collect buckets with edge, sorted by edge descending
+                let mut ladder_candidates: Vec<(usize, f64, f64, f64)> = Vec::new(); // (idx, model_prob, market_price, edge)
+                for (i, bucket) in market.buckets.iter().enumerate() {
+                    let model_prob = probs.get(&bucket.label).copied().unwrap_or(0.0);
+                    let market_price = bucket.ask_price.unwrap_or(bucket.yes_price);
+
+                    if model_prob < self.config.ladder_min_model_prob {
+                        continue;
+                    }
+                    if market_price > self.config.ladder_max_market_price || market_price <= 0.0 {
+                        continue;
+                    }
+                    if model_prob <= market_price {
+                        continue;
+                    }
+
+                    let position_key = format!("{}|{}", market.question, bucket.label);
+                    if self.placed_this_session.contains(&position_key) {
+                        continue;
+                    }
+
+                    let edge = model_prob - market_price;
+                    ladder_candidates.push((i, model_prob, market_price, edge));
+                }
+
+                // Sort by edge descending — highest-edge cheap buckets first
+                ladder_candidates.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
+                let mut ladder_count = 0usize;
+                for (idx, model_prob, market_price, edge) in &ladder_candidates {
+                    if ladder_count >= self.config.ladder_max_buckets {
+                        break;
+                    }
+                    if self.total_exposure >= self.config.max_total_exposure {
+                        debug!("LADDER SKIP: Would exceed max_total_exposure");
+                        break;
+                    }
+
+                    let bucket = &market.buckets[*idx];
+                    let position_key = format!("{}|{}", market.question, bucket.label);
+                    let amount = self.config.ladder_amount_per_bucket;
+                    let remaining = self.config.max_total_exposure - self.total_exposure;
+                    if amount > remaining {
+                        debug!("LADDER SKIP: amount ${:.2} > remaining ${:.2}", amount, remaining);
+                        break;
+                    }
+
+                    // For ladder bets on cheap buckets, take the ask for speed
+                    let order_price = *market_price;
+                    let shares = (amount / order_price * 100.0).floor() / 100.0;
+
+                    if shares < 5.0 {
+                        debug!("LADDER SKIP: shares {:.2} below minimum", shares);
+                        continue;
+                    }
+
+                    let cost = shares * order_price;
+
+                    info!(
+                        "LADDER BET: {} | {} | model={:.3} market={:.3} edge={:.3} | ${:.2}",
+                        market.question, bucket.label, model_prob, market_price, edge, cost
+                    );
+
+                    let mut captured_order_id: Option<String> = None;
+
+                    if !self.dry_run {
+                        match orders::place_order(
+                            &client,
+                            &bucket.token_id,
+                            orders::Side::Buy,
+                            order_price,
+                            shares,
+                            market.neg_risk,
+                            false,
+                        ).await {
+                            Ok(result) => {
+                                info!("Ladder order placed: {} @ ${:.4}", bucket.label, order_price);
+                                captured_order_id = result.get("orderID")
+                                    .or_else(|| result.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                self.total_exposure += cost;
+                                trades_placed += 1;
+                                self.placed_this_session.insert(position_key.clone());
+                            }
+                            Err(e) => {
+                                error!("Ladder order failed: {}", e);
+                                continue;
+                            }
+                        }
+                    } else {
+                        println!("     LADDER (DRY RUN): {} | {} @ ${:.4} x {:.2} = ${:.2}",
+                            bucket.label, "BUY_YES", order_price, shares, cost);
+                        self.total_exposure += cost;
+                        trades_placed += 1;
+                        self.placed_this_session.insert(position_key.clone());
+                    }
+
+                    let trade = WeatherTrade {
+                        timestamp: Utc::now().to_rfc3339(),
+                        market_question: market.question.clone(),
+                        bucket_label: bucket.label.clone(),
+                        city: forecast.city.clone(),
+                        our_probability: *model_prob,
+                        market_price: *market_price,
+                        edge: *edge,
+                        side: "LADDER_BUY_YES".to_string(),
+                        shares,
+                        price: order_price,
+                        cost,
+                        dry_run: self.dry_run,
+                        resolved: false,
+                        filled: false,
+                        order_id: captured_order_id,
+                        market_slug: Some(market.slug.clone()),
+                        fill_confirmed: false,
+                        outcome: None,
+                        pnl: None,
+                        resolution_temp: None,
+                        token_id: Some(bucket.token_id.clone()),
+                    };
+
+                    self.trades.push(trade);
+                    if let Err(e) = self.save_trade_log() {
+                        error!("Failed to save ladder trade log: {}", e);
+                    }
+
+                    ladder_count += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+
+                if ladder_count > 0 {
+                    info!("Laddered {} buckets in market: {}", ladder_count, market.question);
+                }
+            }
         }
 
         if trades_placed > 0 {
@@ -960,20 +1126,25 @@ impl WeatherStrategy {
         Ok(())
     }
 
-    /// Run in a loop (with configurable interval)
+    /// Run in a loop (with schedule-aware timing aligned to model releases)
     pub async fn run_loop(&mut self) -> Result<()> {
         let mode = if self.dry_run { "DRY RUN" } else { "LIVE" };
         println!("\n== Weather Arbitrage Strategy - {} ==", mode);
-        println!("   Scan interval: {}s", self.config.scan_interval_secs);
+        println!("   Model release hours (UTC): {:?}", self.config.scan_schedule.model_release_hours);
+        println!("   Fallback interval: {} min", self.config.scan_schedule.fallback_interval_minutes);
+        println!("   Post-release delay: {} min", self.config.scan_schedule.post_release_delay_minutes);
         println!("   Min edge: {:.0}%", self.config.min_edge * 100.0);
         println!("   Max per bucket: ${:.0}", self.config.max_per_bucket);
         println!("   Max total exposure: ${:.0}", self.config.max_total_exposure);
-        println!("   Kelly fraction: {:.0}%\n", self.config.kelly_fraction * 100.0);
+        println!("   Kelly fraction: {:.0}%", self.config.kelly_fraction * 100.0);
+        println!("   Laddering: {}\n", if self.config.enable_laddering { "ENABLED" } else { "disabled" });
 
         let startup_msg = format!(
-            "Weather Strategy Started ({})\nInterval: {}s | Edge: {:.0}% | Max: ${:.0}",
-            mode, self.config.scan_interval_secs,
-            self.config.min_edge * 100.0, self.config.max_total_exposure
+            "Weather Strategy Started ({})\nModel releases: {:?}Z | Fallback: {}min | Edge: {:.0}% | Max: ${:.0} | Laddering: {}",
+            mode, self.config.scan_schedule.model_release_hours,
+            self.config.scan_schedule.fallback_interval_minutes,
+            self.config.min_edge * 100.0, self.config.max_total_exposure,
+            if self.config.enable_laddering { "ON" } else { "OFF" }
         );
         self.notifier.send(&startup_msg).await;
 
@@ -1002,7 +1173,17 @@ impl WeatherStrategy {
                 }
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(self.config.scan_interval_secs)).await;
+            // Schedule-aware sleep: target post_release_delay minutes after model releases
+            let schedule = &self.config.scan_schedule;
+            let next = next_scan_time(schedule);
+            let wait = (next - Utc::now()).to_std().unwrap_or(
+                std::time::Duration::from_secs(schedule.fallback_interval_minutes * 60)
+            );
+            let fallback = std::time::Duration::from_secs(schedule.fallback_interval_minutes * 60);
+            let sleep_duration = wait.min(fallback);
+            info!("Next scan in {} minutes (next model release window: {})",
+                sleep_duration.as_secs() / 60, next.format("%H:%MZ"));
+            tokio::time::sleep(sleep_duration).await;
         }
     }
 }

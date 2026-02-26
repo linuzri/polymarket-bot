@@ -8,6 +8,33 @@ pub mod strategy;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+/// Scan schedule configuration aligned with weather model releases
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScanSchedule {
+    #[serde(default = "default_model_release_hours")]
+    pub model_release_hours: Vec<u32>,
+    #[serde(default = "default_fallback_interval")]
+    pub fallback_interval_minutes: u64,
+    #[serde(default = "default_post_release_delay")]
+    pub post_release_delay_minutes: u64,
+}
+
+fn default_model_release_hours() -> Vec<u32> {
+    vec![3, 5, 9, 11, 15, 17, 21, 23]
+}
+fn default_fallback_interval() -> u64 { 120 }
+fn default_post_release_delay() -> u64 { 15 }
+
+impl Default for ScanSchedule {
+    fn default() -> Self {
+        ScanSchedule {
+            model_release_hours: default_model_release_hours(),
+            fallback_interval_minutes: default_fallback_interval(),
+            post_release_delay_minutes: default_post_release_delay(),
+        }
+    }
+}
+
 /// Weather configuration loaded from config.toml
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WeatherConfig {
@@ -52,6 +79,18 @@ pub struct WeatherConfig {
     /// where ensemble says 25-50% but overestimates tail probability
     #[serde(default = "default_min_our_probability")]
     pub min_our_probability: f64,
+    #[serde(default)]
+    pub scan_schedule: ScanSchedule,
+    #[serde(default = "default_false")]
+    pub enable_laddering: bool,
+    #[serde(default = "default_ladder_amount")]
+    pub ladder_amount_per_bucket: f64,
+    #[serde(default = "default_ladder_max_buckets")]
+    pub ladder_max_buckets: usize,
+    #[serde(default = "default_ladder_min_prob")]
+    pub ladder_min_model_prob: f64,
+    #[serde(default = "default_ladder_max_price")]
+    pub ladder_max_market_price: f64,
 }
 
 impl Default for WeatherConfig {
@@ -74,10 +113,17 @@ impl Default for WeatherConfig {
             min_market_price: 0.05,
             min_edge_narrow: 0.25,
             min_our_probability: 0.60,
+            scan_schedule: ScanSchedule::default(),
+            enable_laddering: false,
+            ladder_amount_per_bucket: 2.0,
+            ladder_max_buckets: 5,
+            ladder_min_model_prob: 0.05,
+            ladder_max_market_price: 0.15,
         }
     }
 }
 
+fn default_false() -> bool { false }
 fn default_true() -> bool { true }
 fn default_scan_interval() -> u64 { 1800 }
 fn default_min_edge() -> f64 { 0.15 }
@@ -91,6 +137,10 @@ fn default_open_meteo_bias_c() -> f64 { 0.0 }
 fn default_min_market_price() -> f64 { 0.05 }
 fn default_min_edge_narrow() -> f64 { 0.25 }
 fn default_min_our_probability() -> f64 { 0.60 }
+fn default_ladder_amount() -> f64 { 2.0 }
+fn default_ladder_max_buckets() -> usize { 5 }
+fn default_ladder_min_prob() -> f64 { 0.05 }
+fn default_ladder_max_price() -> f64 { 0.15 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()

@@ -49,6 +49,23 @@ forecast_buffer_c = 2.0   # °C for international cities
 cities_us = ["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
 cities_intl = ["london", "seoul", "paris", "toronto", "buenos-aires", "ankara", "wellington"]
 
+# Laddering mode: spread small bets across adjacent buckets
+enable_laddering = true
+ladder_amount_per_bucket = 2.0       # USD per bucket in ladder mode
+ladder_max_buckets = 5               # Max buckets to buy in a single market
+ladder_min_model_prob = 0.05         # Only ladder buckets with >=5% model probability
+ladder_max_market_price = 0.15       # Only buy buckets priced at or below 15 cents
+
+[weather.scan_schedule]
+# Trigger scans aligned with model release times (UTC hours)
+# GFS publishes ~3.5h after init time, ECMWF ~6-7h after init
+# These are approximate availability times, not init times
+model_release_hours = [3, 5, 9, 11, 15, 17, 21, 23]
+# Also run a scan every N minutes as a fallback
+fallback_interval_minutes = 120
+# Run an extra scan N minutes after each model release
+post_release_delay_minutes = 15
+
 [notifications]
 # Telegram notifications
 telegram_enabled = true
