@@ -2,7 +2,7 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Feb 26, 2026)
+## 🔴 Live Trading Status (Feb 27, 2026)
 
 - **Portfolio:** ~$119 USDC | All-time P/L: **+$18.22**
 - **Initial Deposit:** $100.27
@@ -11,12 +11,17 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Cities:** 13 (6 US + 7 international) — all with coordinates, forecast sources + WU station codes
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
 - **Scan Timing:** 8 windows/day aligned to GFS/ECMWF model releases (15min post-publish) + 120min fallback
-- **Laddering:** ENABLED — $2 micro-bets across multiple cheap adjacent buckets (≤15¢) for diversification
+- **Laddering:** ❌ DISABLED (34 orders, 0 fills — fair-value limits never matched in illiquid markets)
+- **Max Exposure:** $60 (reduced from $120 while timezone bug is unfixed)
 - **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
 - **Best Trade:** Seoul Feb 21 — +$31.87 (266% return)
 - **Config:** 15% min edge (25% for narrow buckets), 60% min probability, 25% Kelly, $20/bucket, $60 max exposure, 5¢ min market price
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API
 - **Weekly Summary:** Telegram every Sunday midnight UTC
+
+### ⚠️ Known Bug: Open-Meteo Timezone (Pending Fix)
+
+Open-Meteo Ensemble API aggregates daily max temperature using **UTC days**, not local timezone. This caused a catastrophic $30 loss on Chicago Feb 28 — model showed 100% probability (119/119 members above 42°F) when the actual probability was ~6%. With `&timezone=America/Chicago`, 112/119 members are BELOW 42°F. **Fix: add `&timezone={iana_tz}` to all Open-Meteo API calls with `daily=` parameter.** 7-task fix plan defined, pending implementation.
 
 ## How It Works
 
