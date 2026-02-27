@@ -42,7 +42,7 @@ fn next_scan_time(schedule: &ScanSchedule) -> chrono::DateTime<Utc> {
 }
 
 /// Trade log entry
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherTrade {
     pub timestamp: String,
     pub market_question: String,
@@ -79,6 +79,146 @@ pub struct WeatherTrade {
     /// Token ID for CLOB fill checking
     #[serde(default)]
     pub token_id: Option<String>,
+    /// Open-Meteo multi-model mean temperature (excluding NOAA)
+    #[serde(default)]
+    pub open_meteo_mean: Option<f64>,
+    /// NOAA temperature for the same date (US cities only)
+    #[serde(default)]
+    pub noaa_temp: Option<f64>,
+    /// Number of ensemble members used for probability calculation
+    #[serde(default)]
+    pub ensemble_member_count: usize,
+    /// Ensemble temperature statistics (min, max, mean)
+    #[serde(default)]
+    pub ensemble_min: Option<f64>,
+    #[serde(default)]
+    pub ensemble_max: Option<f64>,
+    #[serde(default)]
+    pub ensemble_mean: Option<f64>,
+    /// Absolute difference between Open-Meteo mean and NOAA forecast
+    #[serde(default)]
+    pub model_disagreement: Option<f64>,
+    /// Probability calculation method: "ensemble", "consensus", or "normal_dist"
+    #[serde(default)]
+    pub probability_source: Option<String>,
+}
+
+// ===== Strategy helper functions =====
+
+/// Task 4: Clamp probability to [0.02, 0.95] before edge calculation.
+fn clamp_probability(p: f64) -> f64 {
+    p.max(0.02).min(0.95)
+}
+
+/// Task 5: Position size reduction factor for suspiciously large edges.
+/// Linear scale from 1.0 at 30% edge down to 0.50 at 50%+ edge.
+fn extreme_edge_size_factor(edge: f64) -> f64 {
+    if edge <= 0.30 {
+        1.0
+    } else if edge >= 0.50 {
+        0.50
+    } else {
+        1.0 - (edge - 0.30) / 0.20 * 0.50
+    }
+}
+
+/// Task 2: Cross-validate ensemble probability against NOAA forecast.
+/// Penalises high ensemble confidence when NOAA strongly disagrees;
+/// boosts very low probability when NOAA supports the bucket.
+fn cross_validate_with_noaa(
+    ensemble_prob: f64,
+    noaa_temp: Option<f64>,
+    bucket: &TempBucket,
+    unit: TempUnit,
+) -> f64 {
+    let Some(noaa) = noaa_temp else {
+        return ensemble_prob;
+    };
+
+    let tolerance = match unit {
+        TempUnit::Fahrenheit => 3.0_f64,
+        TempUnit::Celsius    => 2.0_f64,
+    };
+
+    // Is NOAA temperature near (within tolerance of) our bucket?
+    let noaa_near_bucket = if bucket.min_temp.is_finite() && bucket.max_temp.is_finite() {
+        noaa >= bucket.min_temp - tolerance && noaa <= bucket.max_temp + tolerance
+    } else if bucket.max_temp.is_finite() {
+        noaa <= bucket.max_temp + tolerance
+    } else if bucket.min_temp.is_finite() {
+        noaa >= bucket.min_temp - tolerance
+    } else {
+        true
+    };
+
+    // Ensemble very high but NOAA disagrees: apply distance-based penalty
+    if ensemble_prob > 0.80 && !noaa_near_bucket {
+        let distance = if bucket.min_temp.is_finite() && bucket.max_temp.is_finite() {
+            let center = (bucket.min_temp + bucket.max_temp) / 2.0;
+            (noaa - center).abs()
+        } else if bucket.max_temp.is_finite() {
+            (noaa - bucket.max_temp).abs()
+        } else if bucket.min_temp.is_finite() {
+            (noaa - bucket.min_temp).abs()
+        } else {
+            0.0
+        };
+        // 5% penalty per unit of distance, capped at 25%
+        let penalty = (distance / tolerance * 0.05).min(0.25);
+        return (ensemble_prob - penalty).max(0.60);
+    }
+
+    // Ensemble very low but NOAA supports the bucket: slight boost
+    if ensemble_prob < 0.20 && noaa_near_bucket {
+        return (ensemble_prob + 0.10).min(0.40);
+    }
+
+    ensemble_prob
+}
+
+/// Task 3: Returns true if Open-Meteo and NOAA disagree by more than the
+/// threshold (8 F / 4.5 C), indicating the market should be skipped.
+fn models_disagree_too_much(forecast: &CityForecast, unit: TempUnit) -> bool {
+    let Some(&noaa_temp) = forecast.model_temps.get("noaa") else {
+        return false;
+    };
+
+    let om_temps: Vec<f64> = forecast.model_temps.iter()
+        .filter(|(k, _)| k.as_str() != "noaa")
+        .map(|(_, &v)| v)
+        .collect();
+
+    if om_temps.is_empty() {
+        return false;
+    }
+
+    let om_mean = om_temps.iter().sum::<f64>() / om_temps.len() as f64;
+    let diff = (om_mean - noaa_temp).abs();
+
+    let threshold = match unit {
+        TempUnit::Fahrenheit => 8.0_f64,
+        TempUnit::Celsius    => 4.5_f64,
+    };
+
+    diff > threshold
+}
+
+/// Task 6: Returns true when a narrow bucket lacks sufficient ensemble support.
+/// Narrow = range <= 5 F or 3 C; requires at least 5 ensemble members to trade.
+fn narrow_bucket_insufficient_ensemble(
+    bucket: &TempBucket,
+    unit: TempUnit,
+    ensemble_count: usize,
+) -> bool {
+    if !bucket.min_temp.is_finite() || !bucket.max_temp.is_finite() {
+        return false;
+    }
+    let range = bucket.max_temp - bucket.min_temp;
+    let narrow_threshold = match unit {
+        TempUnit::Fahrenheit => 5.0_f64,
+        TempUnit::Celsius    => 3.0_f64,
+    };
+    range <= narrow_threshold && ensemble_count < 5
 }
 
 /// Weather strategy runner
@@ -310,6 +450,78 @@ impl WeatherStrategy {
         }
     }
 
+    /// Reconcile trade log with actual wallet holdings.
+    /// If the proxy wallet no longer holds shares for a trade, mark it as resolved.
+    /// This handles manual sells, redeems, and any other external position changes.
+    async fn reconcile_with_wallet(&mut self) {
+        let proxy_wallet = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
+        let url = format!(
+            "https://data-api.polymarket.com/positions?user={}&sizeThreshold=0.1",
+            proxy_wallet
+        );
+
+        // Fetch current wallet positions
+        let held_assets: HashSet<String> = match self.http.get(&url).send().await {
+            Ok(resp) => {
+                match resp.json::<Vec<serde_json::Value>>().await {
+                    Ok(positions) => {
+                        positions.iter()
+                            .filter_map(|p| p.get("asset").and_then(|a| a.as_str()).map(|s| s.to_string()))
+                            .collect()
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse wallet positions: {}", e);
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch wallet positions: {}", e);
+                return;
+            }
+        };
+
+        info!("Wallet reconciliation: {} active positions on-chain", held_assets.len());
+
+        // Load trade log
+        let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let mut changed = false;
+        for trade in all_trades.iter_mut() {
+            if trade.resolved || trade.dry_run {
+                continue;
+            }
+
+            // If trade has a token_id, check if wallet still holds it
+            if let Some(ref token_id) = trade.token_id {
+                if !held_assets.contains(token_id) {
+                    trade.resolved = true;
+                    trade.outcome = Some("MANUAL_CLOSE".to_string());
+                    self.total_exposure -= trade.cost;
+                    if self.total_exposure < 0.0 {
+                        self.total_exposure = 0.0;
+                    }
+                    // Remove from dedup set so we can re-enter if needed
+                    let dedup_key = format!("{}|{}", trade.market_question, trade.bucket_label);
+                    self.placed_this_session.remove(&dedup_key);
+                    info!("MANUAL_CLOSE (no longer in wallet): {} | {} | freed ${:.2}",
+                        trade.market_question, trade.bucket_label, trade.cost);
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            if let Ok(json) = serde_json::to_string_pretty(&all_trades) {
+                let _ = std::fs::write("strategy_trades.json", json);
+            }
+            info!("Wallet reconciliation: exposure now ${:.2}", self.total_exposure);
+        }
+    }
+
     /// Check if our specific bucket won by querying Gamma API for outcome prices
     async fn check_bucket_won(&self, slug: &str, bucket_label: &str) -> Option<bool> {
         // Get all markets for this event
@@ -481,6 +693,9 @@ impl WeatherStrategy {
         // Check and mark any resolved positions before scanning for new ones
         self.check_and_mark_resolved().await;
 
+        // Reconcile trade log with actual wallet holdings (detects manual sells)
+        self.reconcile_with_wallet().await;
+
         info!("Weather strategy scan starting ({})", mode);
 
         // Step 1: Discover weather markets
@@ -570,6 +785,57 @@ impl WeatherStrategy {
                 forecast::calculate_probabilities(&adjusted_forecast, &buckets_vec)
             };
 
+            // Task 3: Model disagreement circuit breaker — skip market if OM vs NOAA differ too much
+            if models_disagree_too_much(&adjusted_forecast, market.unit) {
+                let noaa_val = adjusted_forecast.model_temps.get("noaa").copied().unwrap_or(0.0);
+                let om_vals: Vec<f64> = adjusted_forecast.model_temps.iter()
+                    .filter(|(k, _)| k.as_str() != "noaa")
+                    .map(|(_, &v)| v).collect();
+                let om_mean_val = if !om_vals.is_empty() {
+                    om_vals.iter().sum::<f64>() / om_vals.len() as f64
+                } else { 0.0 };
+                warn!(
+                    "SKIP MARKET (model disagreement): {} | OM={:.1} NOAA={:.1} diff={:.1}{}",
+                    market.question, om_mean_val, noaa_val,
+                    (om_mean_val - noaa_val).abs(),
+                    if market.unit == TempUnit::Fahrenheit { "F" } else { "C" }
+                );
+                continue;
+            }
+
+            // Pre-compute diagnostic values for trade logging (Task 7)
+            let noaa_temp_diag = adjusted_forecast.model_temps.get("noaa").copied();
+            let om_temps_diag: Vec<f64> = adjusted_forecast.model_temps.iter()
+                .filter(|(k, _)| k.as_str() != "noaa")
+                .map(|(_, &v)| v).collect();
+            let open_meteo_mean_diag = if !om_temps_diag.is_empty() {
+                Some(om_temps_diag.iter().sum::<f64>() / om_temps_diag.len() as f64)
+            } else {
+                None
+            };
+            let model_disagreement_diag = if let (Some(noaa), Some(om_mean)) = (noaa_temp_diag, open_meteo_mean_diag) {
+                Some((om_mean - noaa).abs())
+            } else {
+                None
+            };
+            let ensemble_count_diag = adjusted_forecast.ensemble_members.as_ref().map_or(0, |m| m.len());
+            let (ensemble_min_diag, ensemble_max_diag, ensemble_mean_diag) =
+                if let Some(ref members) = adjusted_forecast.ensemble_members {
+                    let mn = members.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let mx = members.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let me = members.iter().sum::<f64>() / members.len() as f64;
+                    (Some(mn), Some(mx), Some(me))
+                } else {
+                    (None, None, None)
+                };
+            let probability_source_diag = if ensemble_count_diag >= 20 {
+                "ensemble"
+            } else if adjusted_forecast.model_temps.len() >= 3 {
+                "consensus"
+            } else {
+                "normal_dist"
+            }.to_string();
+
             // Evaluate each bucket for edge
             for bucket in &market.buckets {
                 if self.total_exposure >= self.config.max_total_exposure {
@@ -634,6 +900,16 @@ impl WeatherStrategy {
                     continue;
                 }
 
+                // Task 2: NOAA cross-validation — adjust probability when NOAA disagrees
+                let our_prob = cross_validate_with_noaa(
+                    our_prob,
+                    noaa_temp_diag,
+                    &bucket.temp_bucket,
+                    market.unit,
+                );
+                // Task 4: Clamp probability to [0.02, 0.95]
+                let our_prob = clamp_probability(our_prob);
+
                 // Minimum probability filter — skip low-confidence predictions
                 if our_prob < self.config.min_our_probability {
                     debug!("SKIP: {} our_prob {:.3} below minimum {:.3}",
@@ -644,7 +920,16 @@ impl WeatherStrategy {
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
 
-                // Narrow bucket filter: single-temp buckets (e.g. "18°C") need higher edge
+                // Task 6: Narrow bucket ensemble check — require >= 5 members for tight ranges
+                if narrow_bucket_insufficient_ensemble(&bucket.temp_bucket, market.unit, ensemble_count_diag) {
+                    debug!(
+                        "NARROW ENSEMBLE SKIP: {} | {} | range too tight with only {} ensemble members",
+                        market.question, bucket.label, ensemble_count_diag
+                    );
+                    continue;
+                }
+
+                // Narrow bucket filter: single-temp buckets (e.g. "18C") need higher edge
                 // because ensemble overestimates probability on tight ranges
                 let is_narrow = bucket.temp_bucket.min_temp.is_finite()
                     && bucket.temp_bucket.max_temp.is_finite()
@@ -683,9 +968,24 @@ impl WeatherStrategy {
                     }
 
                     // Kelly criterion position sizing
-                    let kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
+                    let raw_kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
+
+                    // Task 5: Extreme edge warning — reduce position for suspiciously large edges
+                    let kelly_size = if edge > 0.30 {
+                        let factor = extreme_edge_size_factor(edge);
+                        let scaled = raw_kelly_size * factor;
+                        warn!(
+                            "EXTREME EDGE {:.1}%: {} | {} | size factor={:.0}% -> ${:.2}",
+                            edge * 100.0, market.question, bucket.label,
+                            factor * 100.0, scaled
+                        );
+                        scaled
+                    } else {
+                        raw_kelly_size
+                    };
+
                     if kelly_size < 0.50 {
-                        debug!("Kelly size too small (${:.2}) — skipping", kelly_size);
+                        debug!("Kelly size too small (${:.2}) -- skipping", kelly_size);
                         continue;
                     }
 
@@ -776,6 +1076,14 @@ impl WeatherStrategy {
                         pnl: None,
                         resolution_temp: None,
                         token_id: Some(bucket.token_id.clone()),
+                        open_meteo_mean: open_meteo_mean_diag,
+                        noaa_temp: noaa_temp_diag,
+                        ensemble_member_count: ensemble_count_diag,
+                        ensemble_min: ensemble_min_diag,
+                        ensemble_max: ensemble_max_diag,
+                        ensemble_mean: ensemble_mean_diag,
+                        model_disagreement: model_disagreement_diag,
+                        probability_source: Some(probability_source_diag.clone()),
                     };
 
                     // Telegram notification
@@ -923,6 +1231,14 @@ impl WeatherStrategy {
                         pnl: None,
                         resolution_temp: None,
                         token_id: Some(bucket.token_id.clone()),
+                        open_meteo_mean: open_meteo_mean_diag,
+                        noaa_temp: noaa_temp_diag,
+                        ensemble_member_count: ensemble_count_diag,
+                        ensemble_min: ensemble_min_diag,
+                        ensemble_max: ensemble_max_diag,
+                        ensemble_mean: ensemble_mean_diag,
+                        model_disagreement: model_disagreement_diag,
+                        probability_source: Some(probability_source_diag.clone()),
                     };
 
                     self.trades.push(trade);
@@ -1096,29 +1412,7 @@ impl WeatherStrategy {
             Err(_) => Vec::new(),
         };
 
-        all_trades.push(WeatherTrade {
-            timestamp: trade.timestamp.clone(),
-            market_question: trade.market_question.clone(),
-            bucket_label: trade.bucket_label.clone(),
-            city: trade.city.clone(),
-            our_probability: trade.our_probability,
-            market_price: trade.market_price,
-            edge: trade.edge,
-            side: trade.side.clone(),
-            shares: trade.shares,
-            price: trade.price,
-            cost: trade.cost,
-            dry_run: trade.dry_run,
-            resolved: trade.resolved,
-            filled: trade.filled,
-            order_id: trade.order_id.clone(),
-            market_slug: trade.market_slug.clone(),
-            fill_confirmed: trade.fill_confirmed,
-            outcome: trade.outcome.clone(),
-            pnl: trade.pnl,
-            resolution_temp: trade.resolution_temp,
-            token_id: trade.token_id.clone(),
-        });
+        all_trades.push(trade.clone());
 
         let json = serde_json::to_string_pretty(&all_trades)?;
         std::fs::write("strategy_trades.json", json)?;
