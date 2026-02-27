@@ -15,20 +15,20 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 
 ### Feb 27 — Config Changes + Critical Bug Identified
 
-**Timezone bug discovered (ROOT CAUSE — NOT YET FIXED):**
-Open-Meteo Ensemble API uses UTC days for daily max temperature aggregation, NOT local timezone. For Chicago Feb 28, this means the "daily max" includes overnight UTC hours (evening local time) instead of actual daytime. Result: 119/119 ensemble members showed >42°F (mean=51.5°F) when reality was ~38°F. With `&timezone=America/Chicago`, 112/119 members are BELOW 42°F (mean=39.0°F). This caused a $30 bet at 100% model confidence on a ~6% actual probability event.
+**Timezone bug discovered AND FIXED (all 7 tasks implemented):**
+Open-Meteo Ensemble API was using UTC days for daily max temperature aggregation, NOT local timezone. For Chicago Feb 28, this meant the "daily max" included overnight UTC hours instead of actual daytime. Result: 119/119 ensemble members showed >42°F (mean=51.5°F) when reality was ~38°F. With `&timezone=America/Chicago`, 112/119 members are BELOW 42°F (mean=39.0°F). This caused a $30 bet at 100% model confidence on a ~6% actual probability event.
 
-**7 fix tasks identified (pending implementation via coding agent):**
-1. **TASK 1 (EMERGENCY):** Add `timezone: String` to `City` struct, populate IANA timezones for all 24 US + 13 intl cities, add `&timezone={city.timezone}` to ALL Open-Meteo API URLs with `daily=`
-2. **TASK 2:** Cross-validate with NOAA — cap ensemble prob when NOAA disagrees on threshold side
-3. **TASK 3:** Model disagreement filter — skip market if Open-Meteo vs NOAA gap >8°F/4.5°C
-4. **TASK 4:** Probability clamping — all probs capped to [0.02, 0.95]
-5. **TASK 5:** Large edge warning — reduce position size by up to 50% for edges >30%
-6. **TASK 6:** Narrow bucket filter — require ≥5 ensemble members and ≥25% edge for ≤5°F range buckets
-7. **TASK 7:** Diagnostic fields on WeatherTrade (open_meteo_mean, noaa_temp, ensemble stats)
+**All 7 safety tasks implemented:**
+1. ✅ **TASK 1:** `timezone: String` on `City` struct, IANA timezones for all cities, `&timezone=` on ALL Open-Meteo API URLs
+2. ✅ **TASK 2:** `cross_validate_with_noaa()` — caps ensemble prob when NOAA disagrees on threshold side
+3. ✅ **TASK 3:** `models_disagree_too_much()` — skips market if Open-Meteo vs NOAA gap >8°F/4.5°C
+4. ✅ **TASK 4:** `clamp_probability()` — all probs capped to [0.02, 0.95]
+5. ✅ **TASK 5:** Large edge warning — reduces position size by up to 50% for edges >30%
+6. ✅ **TASK 6:** `narrow_bucket_insufficient_ensemble()` — requires ≥5 ensemble members and ≥25% edge for ≤5°F range
+7. ✅ **TASK 7:** Diagnostic fields on WeatherTrade (model_disagreement, etc.)
 
 **Config changes applied:**
-- `max_total_exposure`: $120 → $60 (reduced risk while timezone bug unfixed)
+- `max_total_exposure`: $120 → $60 (conservative while validating fixes)
 - `enable_laddering`: true → false (zero fills in 34 attempts)
 
 ### Feb 26 Upgrades (v3 â€" Competitive Edge)
@@ -85,7 +85,6 @@ Based on competitive analysis of 7+ active weather bots, 5 top traders ($2M+ com
 | **Supabase key** | Updated to new `sb_secret_` format (old JWT keys deprecated by Supabase). |
 
 ### Known Limitations
-- **⚠️ TIMEZONE BUG (CRITICAL):** Open-Meteo Ensemble API returns UTC-aggregated daily max temps. Must add `&timezone={iana_tz}` to all API calls with `daily=` parameter. Without this, model probabilities are WRONG for non-UTC cities. $30 loss on Chicago Feb 28 bet caused by this.
 - No auto-redeem — PolymarketClient has no redeem/settle/merge methods
 - Legacy trades (pre-Feb 22) in strategy_trades.json have no `market_slug` — resolution falls back to substring matching
 - `resolution_temp` placeholder — needs Weather Underground API key for actual lookup

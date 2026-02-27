@@ -19,9 +19,9 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API
 - **Weekly Summary:** Telegram every Sunday midnight UTC
 
-### ⚠️ Known Bug: Open-Meteo Timezone (Pending Fix)
+### Feb 27 — Timezone Bug Fix + 7 Safety Tasks (All Implemented ✅)
 
-Open-Meteo Ensemble API aggregates daily max temperature using **UTC days**, not local timezone. This caused a catastrophic $30 loss on Chicago Feb 28 — model showed 100% probability (119/119 members above 42°F) when the actual probability was ~6%. With `&timezone=America/Chicago`, 112/119 members are BELOW 42°F. **Fix: add `&timezone={iana_tz}` to all Open-Meteo API calls with `daily=` parameter.** 7-task fix plan defined, pending implementation.
+Open-Meteo Ensemble API was aggregating daily max temperature using **UTC days**, not local timezone. This caused a $30 loss on Chicago Feb 28 — model showed 100% probability (119/119 members above 42°F) when actual was ~6%. Fixed by adding `&timezone={iana_tz}` to all Open-Meteo API calls. Also implemented 6 additional safety layers: NOAA cross-validation, model disagreement filter, probability clamping [0.02, 0.95], large edge position reduction, narrow bucket ensemble check, and diagnostic fields on trades. Laddering disabled (0 fills in 34 attempts). Max exposure reduced to $60.
 
 ## How It Works
 
