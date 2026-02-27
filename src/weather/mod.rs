@@ -3,6 +3,7 @@ pub mod open_meteo;
 pub mod forecast;
 pub mod markets;
 pub mod observations;
+pub mod outcomes;
 pub mod strategy;
 
 use std::collections::HashMap;
@@ -160,6 +161,8 @@ pub struct City {
     pub lon: f64,
     pub unit: TempUnit,
     pub wunderground_station: Option<String>,
+    /// IANA timezone string for correct daily max temperature calculation
+    pub timezone: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,30 +199,66 @@ pub fn get_cities(config: &WeatherConfig) -> Vec<City> {
 }
 
 fn us_city(name: &str) -> Option<City> {
-    let (lat, lon, station) = match name.to_lowercase().as_str() {
-        "nyc" | "new york" => (40.7128, -74.0060, "KLGA"),
-        "chicago" => (41.8781, -87.6298, "KORD"),
-        "miami" => (25.7617, -80.1918, "KMIA"),
-        "atlanta" => (33.7490, -84.3880, "KATL"),
-        "seattle" => (47.6062, -122.3321, "KSEA"),
-        "dallas" => (32.7767, -96.7970, "KDFW"),
+    let (lat, lon, station, tz) = match name.to_lowercase().as_str() {
+        "nyc" | "new york"                  => (40.7128,  -74.0060, "KLGA", "America/New_York"),
+        "chicago"                           => (41.8781,  -87.6298, "KORD", "America/Chicago"),
+        "miami"                             => (25.7617,  -80.1918, "KMIA", "America/New_York"),
+        "atlanta"                           => (33.7490,  -84.3880, "KATL", "America/New_York"),
+        "seattle"                           => (47.6062, -122.3321, "KSEA", "America/Los_Angeles"),
+        "dallas"                            => (32.7767,  -96.7970, "KDFW", "America/Chicago"),
+        "los-angeles" | "los angeles"       => (34.0522, -118.2437, "KLAX", "America/Los_Angeles"),
+        "denver"                            => (39.7392, -104.9903, "KDEN", "America/Denver"),
+        "phoenix"                           => (33.4484, -112.0740, "KPHX", "America/Phoenix"),
+        "houston"                           => (29.7604,  -95.3698, "KIAH", "America/Chicago"),
+        "boston"                            => (42.3601,  -71.0589, "KBOS", "America/New_York"),
+        "minneapolis"                       => (44.9778,  -93.2650, "KMSP", "America/Chicago"),
+        "philadelphia"                      => (39.9526,  -75.1652, "KPHL", "America/New_York"),
+        "san-francisco" | "san francisco"   => (37.7749, -122.4194, "KSFO", "America/Los_Angeles"),
+        "las-vegas" | "las vegas"           => (36.1699, -115.1398, "KLAS", "America/Los_Angeles"),
+        "tampa"                             => (27.9506,  -82.4572, "KTPA", "America/New_York"),
+        "detroit"                           => (42.3314,  -83.0458, "KDTW", "America/Detroit"),
+        "austin"                            => (30.2672,  -97.7431, "KAUS", "America/Chicago"),
+        "charlotte"                         => (35.2271,  -80.8431, "KCLT", "America/New_York"),
+        "nashville"                         => (36.1627,  -86.7816, "KBNA", "America/Chicago"),
+        "new-orleans" | "new orleans"       => (29.9511,  -90.0715, "KMSY", "America/Chicago"),
+        "oklahoma-city" | "oklahoma city"   => (35.4676,  -97.5164, "KOKC", "America/Chicago"),
+        "washington-dc" | "washington dc"   => (38.9072,  -77.0369, "KDCA", "America/New_York"),
+        "aurora"                            => (39.7294, -104.8319, "KDEN", "America/Denver"),
         _ => return None,
     };
-    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Fahrenheit, wunderground_station: Some(station.to_string()) })
+    Some(City {
+        name: name.to_lowercase(),
+        lat, lon,
+        unit: TempUnit::Fahrenheit,
+        wunderground_station: Some(station.to_string()),
+        timezone: tz.to_string(),
+    })
 }
 
 fn intl_city(name: &str) -> Option<City> {
-    let (lat, lon, station) = match name.to_lowercase().as_str() {
-        "london" => (51.5074, -0.1278, Some("EGLC")),
-        "seoul" => (37.5665, 126.9780, Some("RKSS")),
-        "paris" => (48.8566, 2.3522, Some("LFPG")),
-        "toronto" => (43.6532, -79.3832, Some("CYYZ")),
-        "buenos-aires" | "buenos aires" => (-34.6037, -58.3816, Some("SAEZ")),
-        "ankara" => (39.9334, 32.8597, Some("LTAC")),
-        "wellington" => (-41.2924, 174.7787, Some("NZWN")),
+    let (lat, lon, station, tz) = match name.to_lowercase().as_str() {
+        "london"                        => (51.5074,   -0.1278, Some("EGLC"), "Europe/London"),
+        "seoul"                         => (37.5665,  126.9780, Some("RKSS"), "Asia/Seoul"),
+        "paris"                         => (48.8566,    2.3522, Some("LFPG"), "Europe/Paris"),
+        "toronto"                       => (43.6532,  -79.3832, Some("CYYZ"), "America/Toronto"),
+        "buenos-aires" | "buenos aires" => (-34.6037, -58.3816, Some("SAEZ"), "America/Argentina/Buenos_Aires"),
+        "ankara"                        => (39.9334,   32.8597, Some("LTAC"), "Europe/Istanbul"),
+        "wellington"                    => (-41.2924,  174.7787, Some("NZWN"), "Pacific/Auckland"),
+        "tokyo"                         => (35.6762,  139.6503, Some("RJTT"), "Asia/Tokyo"),
+        "sydney"                        => (-33.8688,  151.2093, Some("YSSY"), "Australia/Sydney"),
+        "singapore"                     => (1.3521,   103.8198, Some("WSSS"), "Asia/Singapore"),
+        "dubai"                         => (25.2048,   55.2708, Some("OMDB"), "Asia/Dubai"),
+        "berlin"                        => (52.5200,   13.4050, Some("EDDB"), "Europe/Berlin"),
+        "sao-paulo" | "sao paulo"       => (-23.5505,  -46.6333, Some("SBGR"), "America/Sao_Paulo"),
         _ => return None,
     };
-    Some(City { name: name.to_lowercase(), lat, lon, unit: TempUnit::Celsius, wunderground_station: station.map(String::from) })
+    Some(City {
+        name: name.to_lowercase(),
+        lat, lon,
+        unit: TempUnit::Celsius,
+        wunderground_station: station.map(String::from),
+        timezone: tz.to_string(),
+    })
 }
 
 /// Forecast result for a single city/date

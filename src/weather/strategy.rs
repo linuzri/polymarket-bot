@@ -98,9 +98,38 @@ pub struct WeatherTrade {
     /// Absolute difference between Open-Meteo mean and NOAA forecast
     #[serde(default)]
     pub model_disagreement: Option<f64>,
+    /// Fill status: "filled", "partial", "unfilled", "cancelled"
+    #[serde(default)]
+    pub fill_status: Option<String>,
+    /// When fill status was last checked
+    #[serde(default)]
+    pub fill_checked_at: Option<String>,
     /// Probability calculation method: "ensemble", "consensus", or "normal_dist"
     #[serde(default)]
     pub probability_source: Option<String>,
+}
+
+/// Scan cycle summary for logging — tracks what was evaluated, skipped, and why
+#[derive(Serialize, Deserialize, Debug)]
+struct ScanSummary {
+    timestamp: String,
+    markets_discovered: usize,
+    markets_evaluated: usize,
+    markets_skipped_disagreement: usize,
+    markets_skipped_no_forecast: usize,
+    buckets_evaluated: usize,
+    buckets_skipped_low_price: usize,
+    buckets_skipped_dedup: usize,
+    buckets_skipped_narrow: usize,
+    buckets_skipped_no_edge: usize,
+    buckets_skipped_extreme_edge: usize,
+    buckets_skipped_buffer: usize,
+    buckets_skipped_low_prob: usize,
+    trades_attempted: usize,
+    trades_placed: usize,
+    ladder_trades_placed: usize,
+    total_usd_deployed: f64,
+    existing_exposure: f64,
 }
 
 // ===== Strategy helper functions =====
@@ -609,9 +638,12 @@ impl WeatherStrategy {
 
         let now = Utc::now();
         let week_ago = now - chrono::Duration::days(7);
+        let week_start = week_ago.format("%b %d").to_string();
+        let week_end = now.format("%b %d").to_string();
 
-        let recent: Vec<&WeatherTrade> = all_trades.iter()
-            .filter(|t| !t.dry_run && t.resolved)
+        // All trades from this week (not just resolved)
+        let recent_all: Vec<&WeatherTrade> = all_trades.iter()
+            .filter(|t| !t.dry_run)
             .filter(|t| {
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
                     ts.with_timezone(&Utc) >= week_ago
@@ -621,65 +653,138 @@ impl WeatherStrategy {
             })
             .collect();
 
-        if recent.is_empty() {
-            self.notifier.send("📊 WEEKLY SUMMARY\nNo resolved trades this week.").await;
-            return;
-        }
+        let recent_resolved: Vec<&&WeatherTrade> = recent_all.iter()
+            .filter(|t| t.resolved)
+            .collect();
 
-        let total = recent.len();
-        let wins: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("WIN")).collect();
-        let losses: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("LOSS")).collect();
-        let no_fills: Vec<&&WeatherTrade> = recent.iter().filter(|t| t.outcome.as_deref() == Some("NO_FILL")).collect();
-        let win_count = wins.len();
-        let loss_count = losses.len();
+        let total_placed = recent_all.len();
+        let filled: Vec<&&WeatherTrade> = recent_all.iter()
+            .filter(|t| t.fill_status.as_deref() == Some("filled") || t.fill_confirmed)
+            .collect();
+        let unfilled: Vec<&&WeatherTrade> = recent_all.iter()
+            .filter(|t| t.fill_status.as_deref() == Some("unfilled"))
+            .collect();
 
-        let total_pnl: f64 = recent.iter()
+        let wins: Vec<&&WeatherTrade> = recent_resolved.iter()
+            .filter(|t| t.outcome.as_deref() == Some("WIN"))
+            .copied().collect();
+        let losses: Vec<&&WeatherTrade> = recent_resolved.iter()
+            .filter(|t| t.outcome.as_deref() == Some("LOSS"))
+            .copied().collect();
+        let no_fills: Vec<&&WeatherTrade> = recent_resolved.iter()
+            .filter(|t| t.outcome.as_deref() == Some("NO_FILL"))
+            .copied().collect();
+        let pending = total_placed - recent_resolved.len();
+
+        let total_pnl: f64 = recent_resolved.iter()
             .filter_map(|t| t.pnl)
             .sum();
 
-        let win_rate = if win_count + loss_count > 0 {
-            (win_count as f64 / (win_count + loss_count) as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        // Best and worst trades
-        let best = recent.iter()
-            .filter(|t| t.pnl.is_some())
-            .max_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
-        let worst = recent.iter()
-            .filter(|t| t.pnl.is_some())
-            .min_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
-
-        // Average our_prob on wins vs losses
-        let avg_prob_wins = if !wins.is_empty() {
-            wins.iter().map(|t| t.our_probability).sum::<f64>() / wins.len() as f64
-        } else {
-            0.0
-        };
-        let avg_prob_losses = if !losses.is_empty() {
-            losses.iter().map(|t| t.our_probability).sum::<f64>() / losses.len() as f64
+        let win_rate = if wins.len() + losses.len() > 0 {
+            (wins.len() as f64 / (wins.len() + losses.len()) as f64) * 100.0
         } else {
             0.0
         };
 
         let mut msg = format!(
-            "📊 WEEKLY SUMMARY\nTrades: {} | Wins: {} | Losses: {} | No-Fill: {} | Win rate: {:.0}%\nP&L: {:+.2}",
-            total, win_count, loss_count, no_fills.len(), win_rate, total_pnl
+            "WEEKLY PERFORMANCE ({} - {})\n\nTrades: {} placed, {} filled, {} unfilled\nResults: {} wins, {} losses, {} no-fill, {} pending\nP&L: {:+.2}\nWin Rate: {:.0}%",
+            week_start, week_end,
+            total_placed, filled.len(), unfilled.len(),
+            wins.len(), losses.len(), no_fills.len(), pending,
+            total_pnl, win_rate
         );
 
-        if let Some(b) = best {
-            msg.push_str(&format!("\nBest: {} {} ({:+.2})", b.city, b.bucket_label, b.pnl.unwrap_or(0.0)));
-        }
-        if let Some(w) = worst {
-            msg.push_str(&format!("\nWorst: {} {} ({:+.2})", w.city, w.bucket_label, w.pnl.unwrap_or(0.0)));
+        // Forecast accuracy from outcomes file
+        let outcomes: Vec<super::outcomes::TradeOutcome> = match std::fs::read_to_string("trade_outcomes.jsonl") {
+            Ok(data) => data.lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let recent_outcomes: Vec<&super::outcomes::TradeOutcome> = outcomes.iter()
+            .filter(|o| {
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&o.trade_date) {
+                    ts.with_timezone(&Utc) >= week_ago
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        if !recent_outcomes.is_empty() {
+            let errors: Vec<f64> = recent_outcomes.iter()
+                .filter_map(|o| o.forecast_error.map(|e| e.abs()))
+                .collect();
+            if !errors.is_empty() {
+                let mae = errors.iter().sum::<f64>() / errors.len() as f64;
+                msg.push_str(&format!("\n\nForecast Accuracy:\n  MAE: {:.1}F ({} trades)", mae, errors.len()));
+            }
         }
 
-        if win_count > 0 || loss_count > 0 {
+        // Guardrail stats from scan log
+        let scan_summaries: Vec<ScanSummary> = match std::fs::read_to_string("scan_log.jsonl") {
+            Ok(data) => data.lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let recent_scans: Vec<&ScanSummary> = scan_summaries.iter()
+            .filter(|s| {
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&s.timestamp) {
+                    ts.with_timezone(&Utc) >= week_ago
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        if !recent_scans.is_empty() {
+            let total_disagreement: usize = recent_scans.iter().map(|s| s.markets_skipped_disagreement).sum();
+            let total_narrow: usize = recent_scans.iter().map(|s| s.buckets_skipped_narrow).sum();
+            let total_extreme: usize = recent_scans.iter().map(|s| s.buckets_skipped_extreme_edge).sum();
+            let total_low_prob: usize = recent_scans.iter().map(|s| s.buckets_skipped_low_prob).sum();
+
             msg.push_str(&format!(
-                "\nAvg our_prob on wins: {:.2} | losses: {:.2}",
-                avg_prob_wins, avg_prob_losses
+                "\n\nGuardrails ({} scans):\n  Model disagreement: {} skipped\n  Narrow bucket: {} skipped\n  Extreme edge: {} flagged\n  Low probability: {} skipped",
+                recent_scans.len(), total_disagreement, total_narrow, total_extreme, total_low_prob
             ));
+        }
+
+        // Edge distribution
+        let edge_15_20: Vec<&&WeatherTrade> = recent_all.iter().filter(|t| t.edge >= 0.15 && t.edge < 0.20).collect();
+        let edge_20_30: Vec<&&WeatherTrade> = recent_all.iter().filter(|t| t.edge >= 0.20 && t.edge < 0.30).collect();
+        let edge_30_plus: Vec<&&WeatherTrade> = recent_all.iter().filter(|t| t.edge >= 0.30).collect();
+
+        if !recent_all.is_empty() {
+            let wins_in = |trades: &[&&WeatherTrade]| -> usize {
+                trades.iter().filter(|t| t.outcome.as_deref() == Some("WIN")).count()
+            };
+            msg.push_str(&format!(
+                "\n\nEdge Distribution:\n  15-20%%: {} trades ({} wins)\n  20-30%%: {} trades ({} wins)\n  30%%+: {} trades ({} wins)",
+                edge_15_20.len(), wins_in(&edge_15_20),
+                edge_20_30.len(), wins_in(&edge_20_30),
+                edge_30_plus.len(), wins_in(&edge_30_plus)
+            ));
+        }
+
+        // Top trades
+        let best = recent_resolved.iter()
+            .filter(|t| t.pnl.is_some())
+            .max_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
+        let worst = recent_resolved.iter()
+            .filter(|t| t.pnl.is_some())
+            .min_by(|a, b| a.pnl.unwrap_or(0.0).partial_cmp(&b.pnl.unwrap_or(0.0)).unwrap());
+
+        if best.is_some() || worst.is_some() {
+            msg.push_str("\n\nTop trades:");
+            if let Some(b) = best {
+                msg.push_str(&format!("\n  {:+.2} {} {}", b.pnl.unwrap_or(0.0), b.city, b.bucket_label));
+            }
+            if let Some(w) = worst {
+                msg.push_str(&format!("\n  {:+.2} {} {}", w.pnl.unwrap_or(0.0), w.city, w.bucket_label));
+            }
         }
 
         info!("{}", msg);
@@ -696,12 +801,42 @@ impl WeatherStrategy {
         // Reconcile trade log with actual wallet holdings (detects manual sells)
         self.reconcile_with_wallet().await;
 
+        // Check fill status for pending orders
+        self.check_fill_status().await;
+
+        // Check forecast outcomes for resolved trades
+        super::outcomes::check_outcomes(&self.http, &self.config).await;
+
         info!("Weather strategy scan starting ({})", mode);
+
+        // Scan summary counters (Task 1)
+        let mut scan = ScanSummary {
+            timestamp: Utc::now().to_rfc3339(),
+            markets_discovered: 0,
+            markets_evaluated: 0,
+            markets_skipped_disagreement: 0,
+            markets_skipped_no_forecast: 0,
+            buckets_evaluated: 0,
+            buckets_skipped_low_price: 0,
+            buckets_skipped_dedup: 0,
+            buckets_skipped_narrow: 0,
+            buckets_skipped_no_edge: 0,
+            buckets_skipped_extreme_edge: 0,
+            buckets_skipped_buffer: 0,
+            buckets_skipped_low_prob: 0,
+            trades_attempted: 0,
+            trades_placed: 0,
+            ladder_trades_placed: 0,
+            total_usd_deployed: 0.0,
+            existing_exposure: self.total_exposure,
+        };
 
         // Step 1: Discover weather markets
         let weather_markets = markets::discover_weather_markets(&self.http).await?;
+        scan.markets_discovered = weather_markets.len();
         if weather_markets.is_empty() {
             info!("No weather markets found on Polymarket");
+            self.write_scan_summary(&scan);
             return Ok(0);
         }
         info!("Found {} weather markets", weather_markets.len());
@@ -730,9 +865,11 @@ impl WeatherStrategy {
                 Some(f) => f.clone(),
                 None => {
                     debug!("No matching forecast for market: {}", market.question);
+                    scan.markets_skipped_no_forecast += 1;
                     continue;
                 }
             };
+            scan.markets_evaluated += 1;
 
             // For same-day markets: fetch current observation as a sanity check (Task 4)
             let mut adjusted_forecast = forecast.clone();
@@ -800,6 +937,7 @@ impl WeatherStrategy {
                     (om_mean_val - noaa_val).abs(),
                     if market.unit == TempUnit::Fahrenheit { "F" } else { "C" }
                 );
+                scan.markets_skipped_disagreement += 1;
                 continue;
             }
 
@@ -854,9 +992,11 @@ impl WeatherStrategy {
 
                 // Minimum market price filter — skip buckets priced below threshold
                 // When market prices <5¢, our model is unreliable in the tails
+                scan.buckets_evaluated += 1;
                 if market_price < self.config.min_market_price {
                     debug!("SKIP: {} market price {:.3} below minimum {:.3}",
                         bucket.label, market_price, self.config.min_market_price);
+                    scan.buckets_skipped_low_price += 1;
                     continue;
                 }
 
@@ -864,6 +1004,7 @@ impl WeatherStrategy {
                 let position_key = format!("{}|{}", market.question, bucket.label);
                 if self.placed_this_session.contains(&position_key) {
                     debug!("SKIP: Already have position in {} | {}", market.question, bucket.label);
+                    scan.buckets_skipped_dedup += 1;
                     continue;
                 }
 
@@ -873,6 +1014,7 @@ impl WeatherStrategy {
                 if file_keys.contains(&position_key) {
                     warn!("DOUBLE-CHECK SKIP: {} already in trade log", position_key);
                     self.placed_this_session.insert(position_key.clone());
+                    scan.buckets_skipped_dedup += 1;
                     continue;
                 }
 
@@ -897,6 +1039,7 @@ impl WeatherStrategy {
                         "BUFFER SKIP: {} | forecast={:.1} too close to bucket threshold (buffer={:.1})",
                         bucket.label, forecast_temp, buffer
                     );
+                    scan.buckets_skipped_buffer += 1;
                     continue;
                 }
 
@@ -914,6 +1057,7 @@ impl WeatherStrategy {
                 if our_prob < self.config.min_our_probability {
                     debug!("SKIP: {} our_prob {:.3} below minimum {:.3}",
                         bucket.label, our_prob, self.config.min_our_probability);
+                    scan.buckets_skipped_low_prob += 1;
                     continue;
                 }
 
@@ -926,6 +1070,7 @@ impl WeatherStrategy {
                         "NARROW ENSEMBLE SKIP: {} | {} | range too tight with only {} ensemble members",
                         market.question, bucket.label, ensemble_count_diag
                     );
+                    scan.buckets_skipped_narrow += 1;
                     continue;
                 }
 
@@ -946,6 +1091,11 @@ impl WeatherStrategy {
                         market.question, bucket.label, edge, required_edge,
                         bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp
                     );
+                    scan.buckets_skipped_narrow += 1;
+                }
+
+                if edge < required_edge {
+                    scan.buckets_skipped_no_edge += 1;
                 }
 
                 if edge >= required_edge {
@@ -972,6 +1122,7 @@ impl WeatherStrategy {
 
                     // Task 5: Extreme edge warning — reduce position for suspiciously large edges
                     let kelly_size = if edge > 0.30 {
+                        scan.buckets_skipped_extreme_edge += 1;
                         let factor = extreme_edge_size_factor(edge);
                         let scaled = raw_kelly_size * factor;
                         warn!(
@@ -1012,6 +1163,7 @@ impl WeatherStrategy {
 
                     let cost = shares * order_price;
 
+                    scan.trades_attempted += 1;
                     println!("  >> WEATHER TRADE: {} | {}", market.question, bucket.label);
                     println!("     Our P={:.3} | Mid={:.3} | Edge={:.3} | Kelly=${:.2}",
                         our_prob, market_price, edge, kelly_size);
@@ -1031,13 +1183,14 @@ impl WeatherStrategy {
                         ).await {
                             Ok(result) => {
                                 info!("Weather order placed: {} @ ${:.4}", bucket.label, order_price);
-                                // Capture order ID from CLOB response
                                 captured_order_id = result.get("orderID")
                                     .or_else(|| result.get("id"))
                                     .and_then(|v| v.as_str())
                                     .map(|s| s.to_string());
                                 self.total_exposure += cost;
                                 trades_placed += 1;
+                                scan.trades_placed += 1;
+                                scan.total_usd_deployed += cost;
                                 self.placed_this_session.insert(position_key.clone());
                             }
                             Err(e) => {
@@ -1084,6 +1237,8 @@ impl WeatherStrategy {
                         ensemble_mean: ensemble_mean_diag,
                         model_disagreement: model_disagreement_diag,
                         probability_source: Some(probability_source_diag.clone()),
+                        fill_status: None,
+                        fill_checked_at: None,
                     };
 
                     // Telegram notification
@@ -1194,6 +1349,9 @@ impl WeatherStrategy {
                                     .map(|s| s.to_string());
                                 self.total_exposure += cost;
                                 trades_placed += 1;
+                                scan.ladder_trades_placed += 1;
+                                scan.trades_placed += 1;
+                                scan.total_usd_deployed += cost;
                                 self.placed_this_session.insert(position_key.clone());
                             }
                             Err(e) => {
@@ -1239,6 +1397,8 @@ impl WeatherStrategy {
                         ensemble_mean: ensemble_mean_diag,
                         model_disagreement: model_disagreement_diag,
                         probability_source: Some(probability_source_diag.clone()),
+                        fill_status: None,
+                        fill_checked_at: None,
                     };
 
                     self.trades.push(trade);
@@ -1261,6 +1421,9 @@ impl WeatherStrategy {
         } else {
             info!("Weather strategy: no edges found this cycle");
         }
+
+        // Write scan summary (Task 1)
+        self.write_scan_summary(&scan);
 
         // Heartbeat: send status every 2 hours (every 4th cycle at 30min intervals)
         let hour = Utc::now().hour();
@@ -1418,6 +1581,116 @@ impl WeatherStrategy {
         std::fs::write("strategy_trades.json", json)?;
 
         Ok(())
+    }
+
+    /// Write scan summary to JSONL log file
+    fn write_scan_summary(&self, scan: &ScanSummary) {
+        info!(
+            "SCAN SUMMARY: {} markets, {} evaluated, {} disagreement, {} no-forecast | {} buckets, {} trades placed, ${:.2} deployed | exposure: ${:.2}",
+            scan.markets_discovered, scan.markets_evaluated,
+            scan.markets_skipped_disagreement, scan.markets_skipped_no_forecast,
+            scan.buckets_evaluated, scan.trades_placed,
+            scan.total_usd_deployed, self.total_exposure
+        );
+
+        if let Ok(json) = serde_json::to_string(scan) {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true).append(true).open("scan_log.jsonl")
+            {
+                let _ = writeln!(f, "{}", json);
+            }
+        }
+    }
+
+    /// Check fill status for pending orders via CLOB API (Task 3)
+    async fn check_fill_status(&mut self) {
+        let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let mut changed = false;
+        let maker_addr = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
+
+        for trade in all_trades.iter_mut() {
+            if trade.dry_run || trade.resolved {
+                continue;
+            }
+            // Skip if already checked
+            if trade.fill_status.is_some() {
+                continue;
+            }
+            // Need either order_id or token_id
+            let token_id = match trade.token_id.as_deref() {
+                Some(t) => t.to_string(),
+                None => continue,
+            };
+
+            // Check if we have fills for this token
+            let url = format!(
+                "https://clob.polymarket.com/trades?maker={}&market={}",
+                maker_addr, token_id
+            );
+
+            match self.http.get(&url).send().await {
+                Ok(resp) => {
+                    match resp.json::<Vec<serde_json::Value>>().await {
+                        Ok(trades_list) => {
+                            let status = if !trades_list.is_empty() {
+                                "filled"
+                            } else {
+                                // Check if order is still open
+                                if let Some(ref order_id) = trade.order_id {
+                                    let order_url = format!(
+                                        "https://clob.polymarket.com/order/{}",
+                                        order_id
+                                    );
+                                    match self.http.get(&order_url).send().await {
+                                        Ok(resp) => {
+                                            match resp.json::<serde_json::Value>().await {
+                                                Ok(order) => {
+                                                    let status_str = order.get("status")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("unknown");
+                                                    match status_str {
+                                                        "MATCHED" => "filled",
+                                                        "LIVE" => "unfilled",
+                                                        "CANCELLED" => "cancelled",
+                                                        _ => "unfilled",
+                                                    }
+                                                }
+                                                Err(_) => "unfilled",
+                                            }
+                                        }
+                                        Err(_) => "unfilled",
+                                    }
+                                } else {
+                                    "unfilled"
+                                }
+                            };
+                            trade.fill_status = Some(status.to_string());
+                            trade.fill_checked_at = Some(Utc::now().to_rfc3339());
+                            if status == "filled" {
+                                trade.fill_confirmed = true;
+                            }
+                            info!("FILL CHECK: {} | {} | {}", trade.city, trade.bucket_label, status);
+                            changed = true;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Err(_) => {}
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+
+        if changed {
+            if let Ok(json) = serde_json::to_string_pretty(&all_trades) {
+                let _ = std::fs::write("strategy_trades.json", json);
+            }
+        }
     }
 
     /// Run in a loop (with schedule-aware timing aligned to model releases)
