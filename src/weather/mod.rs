@@ -201,11 +201,11 @@ pub fn get_cities(config: &WeatherConfig) -> Vec<City> {
 fn us_city(name: &str) -> Option<City> {
     let (lat, lon, station, tz) = match name.to_lowercase().as_str() {
         "nyc" | "new york"                  => (40.7128,  -74.0060, "KLGA", "America/New_York"),
-        "chicago"                           => (41.8781,  -87.6298, "KORD", "America/Chicago"),
+        "chicago"                           => (41.9742,  -87.9073, "KORD", "America/Chicago"),
         "miami"                             => (25.7617,  -80.1918, "KMIA", "America/New_York"),
         "atlanta"                           => (33.7490,  -84.3880, "KATL", "America/New_York"),
         "seattle"                           => (47.6062, -122.3321, "KSEA", "America/Los_Angeles"),
-        "dallas"                            => (32.7767,  -96.7970, "KDFW", "America/Chicago"),
+        "dallas"                            => (32.8471,  -96.8518, "KDAL", "America/Chicago"),
         "los-angeles" | "los angeles"       => (34.0522, -118.2437, "KLAX", "America/Los_Angeles"),
         "denver"                            => (39.7392, -104.9903, "KDEN", "America/Denver"),
         "phoenix"                           => (33.4484, -112.0740, "KPHX", "America/Phoenix"),
