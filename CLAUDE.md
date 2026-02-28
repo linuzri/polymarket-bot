@@ -3,15 +3,38 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** â€" uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Feb 27, 2026)
-- **Portfolio:** ~$119 USDC | All-time P&L: +$18.22
-- **Open Positions:** Chicago 42°F bet ($30 at risk — NOAA says 38°F, model said 100% wrong due to timezone bug)
-- **PM2:** `polymarket-bot` ONLINE — schedule-aware scanning aligned to model releases
+## Current Status (Feb 28, 2026)
+- **Portfolio:** ~$89 USDC cash + ~$26 pending positions | All-time P&L: -$10.84
+- **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss; Seoul +$30.48 was biggest win)
+- **PM2:** `polymarket-bot` ONLINE — Phase A deployed, schedule-aware scanning
 - **Telegram:** Trade alerts + weekly P&L summary (Sundays midnight UTC)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
-- **Max Exposure:** $60 (reduced from $120 on Feb 27)
-- **Laddering:** DISABLED (34 orders placed, 0 fills, 0 profit — fair-value limits never matched in illiquid markets)
-- **Roadmap:** WATCH & WAIT — monitoring v3 changes for 1 week, then Tasks 3-6
+- **Max Exposure:** $80 (raised from $60 after batch sell recovered funds)
+- **Laddering:** DISABLED (34 orders placed, 0 fills)
+- **Wellington:** REMOVED — worst city (-$14.02 on $17.32, 0 wins)
+- **Phase A:** DEPLOYED Feb 28 — config tuning, bucket-type sizing, order book pricing
+- **Phase B (backlog):** BUY_NO support + cross-bucket mispricing — after 3 days of Phase A data (Mar 3)
+- **Phase C (backlog):** Auto-redeem, forecast delta, afternoon aggressive mode — after 1 week (Mar 7)
+
+### Feb 28 — Phase A: Data-Driven Strategy Overhaul
+
+**Deep analysis of 197 on-chain transactions (Feb 12-28) revealed:**
+- Wide "or higher" buckets: +$32.24 (86% ROI) — **only profitable category**
+- Exact temperature bets: -$28.51 (0% resolved win rate) — **worst category**
+- Seoul alone = 61% of weather gross winnings (+$30.48)
+- Wellington = worst city (-$14.02, 0 wins)
+- Order pricing at 85% fair value → 0% fill rate on ladders
+
+**Phase A changes (commit 1498cbf):**
+1. **Config tuning:** min_edge 0.15→0.12, min_market_price 0.05→0.02, min_our_probability 0.60→0.45, forecast_buffer 3/2→2/1°F/°C, min_edge_narrow 0.25→0.45, max_per_bucket 30→15, kelly_bankroll 120→90. Wellington REMOVED.
+2. **Per-bucket file read fix:** load_open_position_keys() called ONCE before market loop (was 224x per scan)
+3. **Bucket-type position sizing:** wide directional 1.5x, narrow/exact 0.2x, medium 0.5x
+4. **Order-book-aware pricing:** taker for >25% edge with depth, near-ask for >15% edge, maker fallback
+5. **Outcomes temp unit fix:** Open-Meteo archive returns Celsius; now converts for US cities
+
+**Station code fixes (commit 16b0b89):**
+- Dallas: KDFW → KDAL (Polymarket resolves on Love Field, not DFW — 20+ miles apart)
+- Chicago: coordinates updated from city center to O'Hare airport
 
 ### Feb 27 — Config Changes + Critical Bug Identified
 
@@ -96,14 +119,18 @@ Based on competitive analysis of 7+ active weather bots, 5 top traders ($2M+ com
 - **Ensemble probabilities** (preferred): each member votes for a bucket â€" non-parametric
 - **Normal distribution** (fallback): when <20 ensemble members available
 - Places LIMIT BUY orders at 85% of fair value (maker, zero fees)
-- Kelly criterion sizing: 25% fraction, $100 bankroll, $20 max/bucket, $60 total exposure
-- Min edge: 15% | Min market price: 5Â¢ | Forecast buffer: 3Â°F / 2Â°C
+- Kelly criterion sizing: 25% fraction, $90 bankroll, $15 max/bucket, $80 total exposure
+- Bucket-type multiplier: wide directional 1.5x, exact/narrow 0.2x, medium 0.5x
+- Order pricing: taker (>25% edge + depth), near-ask (>15% edge), maker (fallback)
+- Min edge: 12% (wide) / 45% (narrow) | Min market price: 2Â¢ | Min probability: 45%
+- Forecast buffer: 2Â°F / 1Â°C
 - Same-day markets: real-time observation adjustment when current temp > forecast
 - Resolution: 1-2 days
 
 ### Cities
-- **US (Â°F, NOAA + Open-Meteo + Ensemble):** NYC (KLGA), Chicago (KORD), Miami (KMIA), Atlanta (KATL), Seattle (KSEA), Dallas (KDFW)
-- **International (Â°C, Open-Meteo + Ensemble):** London (EGLC), Seoul (RKSS), Paris (LFPG), Toronto (CYYZ), Buenos Aires (SAEZ), Ankara (LTAC), Wellington (NZWN)
+- **US (Â°F, NOAA + Open-Meteo + Ensemble):** NYC (KLGA), Chicago (KORD), Miami (KMIA), Atlanta (KATL), Seattle (KSEA), Dallas (KDAL)
+- **International (Â°C, Open-Meteo + Ensemble):** London (EGLC), Seoul (RKSS), Paris (LFPG), Toronto (CYYZ), Buenos Aires (SAEZ), Ankara (LTAC)
+- **Removed:** Wellington (NZWN) â€" worst city by P&L (-$14.02 on $17.32, 0 wins)
 - Station codes in parentheses = Weather Underground resolution stations
 
 ### Market Discovery
@@ -164,7 +191,7 @@ pub struct WeatherTrade {
    a. Same-day? â†' fetch current observation, adjust forecast if current > forecast high
    b. Log resolution station (WUnderground code)
    c. Use ensemble probabilities (119 members) or fall back to normal distribution
-5. For each bucket: min price check â†' min probability (â‰¥0.60) â†' dedup â†' buffer check â†' edge check (narrow buckets need 0.25) â†' Kelly sizing â†' order
+5. For each bucket: min price check (â‰¥2Â¢) â†' dedup â†' buffer check (2Â°F/1Â°C) â†' NOAA cross-validation â†' min probability (â‰¥0.45) â†' edge check (wide â‰¥0.12, narrow â‰¥0.45) â†' Kelly sizing Ã— bucket-type multiplier â†' order-book-aware pricing â†' order
 6. **Laddering pass** (if enabled): second scan for cheap buckets (â‰¤15Â¢) with model_prob > market_price. $2/bucket, up to 5 per market, sorted by edge. Logged as `LADDER_BUY_YES`.
 7. `save_trade_log()` after each successful trade (with market_slug)
 

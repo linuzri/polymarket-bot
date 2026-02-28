@@ -2,40 +2,54 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Feb 27, 2026)
+## 🔴 Live Trading Status (Feb 28, 2026)
 
-- **Portfolio:** ~$119 USDC | All-time P/L: **+$18.22**
+- **Portfolio:** ~$89 USDC cash + ~$26 pending | All-time P/L: **-$10.84**
+- **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss)
 - **Initial Deposit:** $100.27
-- **Strategy:** 100% Weather Arbitrage (all other strategies on backlog)
+- **Strategy:** 100% Weather Arbitrage — **Phase A data-driven overhaul deployed**
 - **PM2:** `polymarket-bot` **ONLINE** — schedule-aware scanning aligned to weather model releases
-- **Cities:** 13 (6 US + 7 international) — all with coordinates, forecast sources + WU station codes
+- **Cities:** 12 (6 US + 6 international) — Wellington removed (worst city, -$14 P&L)
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
 - **Scan Timing:** 8 windows/day aligned to GFS/ECMWF model releases (15min post-publish) + 120min fallback
-- **Laddering:** ❌ DISABLED (34 orders, 0 fills — fair-value limits never matched in illiquid markets)
-- **Max Exposure:** $60 (reduced from $120 while timezone bug is unfixed)
-- **First Live Trades:** Feb 16, 2026 — Miami 81°F, Seoul 7°C
+- **Laddering:** ❌ DISABLED (34 orders, 0 fills)
+- **Max Exposure:** $80 | **Max/bucket:** $15
 - **Best Trade:** Seoul Feb 21 — +$31.87 (266% return)
-- **Config:** 15% min edge (25% for narrow buckets), 60% min probability, 25% Kelly, $20/bucket, $60 max exposure, 5¢ min market price
-- **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API
+- **Config:** 12% min edge (45% for narrow), 45% min probability, 25% Kelly, $15/bucket, $80 max exposure, 2¢ min market price
+- **Bucket-type sizing:** Wide directional 1.5x, exact/narrow 0.2x — based on data showing wide bets +$32 vs exact -$28
+- **Order pricing:** Taker (>25% edge), near-ask (>15% edge), maker (fallback) — replaces static 85% fair value
+- **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
+
+### Feb 28 — Phase A: Data-Driven Strategy Overhaul
+
+Deep analysis of 197 on-chain transactions (Feb 12-28) revealed critical insights:
+- **Wide "or higher" bets = only profitable category** (+$32.24, 86% ROI)
+- **Exact temperature bets = worst category** (-$28.51, 0% resolved win rate)
+- **Seoul = 61% of gross winnings** (+$30.48)
+- **Wellington = worst city** (-$14.02 on $17.32) → REMOVED
+
+Phase A changes: (1) config loosening to let bot trade again, (2) per-bucket file read perf fix, (3) bucket-type position sizing (wide 1.5x, exact 0.2x), (4) order-book-aware pricing (taker/near-ask/maker), (5) outcomes temperature unit conversion fix for US cities.
+
+Station code fixes: Dallas KDFW→KDAL (Polymarket resolves on Love Field), Chicago coords to O'Hare airport.
 
 ### Feb 27 — Timezone Bug Fix + 7 Safety Tasks (All Implemented ✅)
 
-Open-Meteo Ensemble API was aggregating daily max temperature using **UTC days**, not local timezone. This caused a $30 loss on Chicago Feb 28 — model showed 100% probability (119/119 members above 42°F) when actual was ~6%. Fixed by adding `&timezone={iana_tz}` to all Open-Meteo API calls. Also implemented 6 additional safety layers: NOAA cross-validation, model disagreement filter, probability clamping [0.02, 0.95], large edge position reduction, narrow bucket ensemble check, and diagnostic fields on trades. Laddering disabled (0 fills in 34 attempts). Max exposure reduced to $60.
+Open-Meteo Ensemble API was aggregating daily max temperature using **UTC days**, not local timezone. This caused a $30 loss on Chicago Feb 28 — model showed 100% probability (119/119 members above 42°F) when actual was ~6%. Fixed by adding `&timezone={iana_tz}` to all Open-Meteo API calls. Also implemented 6 additional safety layers: NOAA cross-validation, model disagreement filter, probability clamping [0.02, 0.95], large edge position reduction, narrow bucket ensemble check, and diagnostic fields on trades. Laddering disabled (0 fills in 34 attempts).
 
 ## How It Works
 
 ```
 Schedule-aware scan loop (8 windows/day aligned to GFS/ECMWF model releases):
-1. Discover weather markets → 30+ markets across 13 cities (today + tomorrow + day after)
+1. Discover weather markets → 24+ markets across 12 cities (today + tomorrow + day after)
 2. Fetch forecasts → NOAA (US) + Open-Meteo (all) + 119 ensemble members
 3. Same-day markets → fetch real-time observations, adjust forecast if needed
 4. Calculate probabilities → Ensemble voting (preferred) or normal distribution (fallback)
-5. Find edges → Our probability vs market price (min 15% edge + forecast buffer)
-6. Filter → Skip buckets below 5¢ (model unreliable in tails)
-7. Size positions → Kelly criterion (25% fraction, $20 max per bucket)
-8. Place limit orders → BUY YES at 85% of fair value (maker, zero fees)
-9. Laddering pass → $2 micro-bets on cheap adjacent buckets (≤15¢) with positive edge
+5. Find edges → Our probability vs market price (min 12% edge, 45% for narrow + buffer check)
+6. Filter → Skip buckets below 2¢, min probability 45%, NOAA cross-validation
+7. Size positions → Kelly criterion (25%) × bucket-type multiplier (wide 1.5x, exact 0.2x)
+8. Price orders → Fetch order book: taker for >25% edge, near-ask for >15%, maker fallback
+9. Place orders → BUY YES with order-book-aware pricing
 10. Resolution → 1-2 days, slug-based Gamma API detection
 ```
 
