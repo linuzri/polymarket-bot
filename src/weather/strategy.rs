@@ -854,6 +854,9 @@ impl WeatherStrategy {
         let mut trades_placed = 0u32;
         let client = PolymarketClient::new()?;
 
+        // Pre-load open position keys ONCE (was loading per-bucket — 224 file reads/scan)
+        let file_position_keys = Self::load_open_position_keys();
+
         for market in &weather_markets {
             if self.total_exposure >= self.config.max_total_exposure {
                 info!("Total weather exposure limit reached (${:.2})", self.total_exposure);
@@ -1010,8 +1013,8 @@ impl WeatherStrategy {
 
                 // Double-check against trade log file (catches positions from previous sessions
                 // that may not be in placed_this_session due to resolved/parsing issues)
-                let file_keys = Self::load_open_position_keys();
-                if file_keys.contains(&position_key) {
+                // Uses pre-loaded keys from start of run_once() — not per-bucket file reads
+                if file_position_keys.contains(&position_key) {
                     warn!("DOUBLE-CHECK SKIP: {} already in trade log", position_key);
                     self.placed_this_session.insert(position_key.clone());
                     scan.buckets_skipped_dedup += 1;
@@ -1120,6 +1123,33 @@ impl WeatherStrategy {
                     // Kelly criterion position sizing
                     let raw_kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
 
+                    // Bucket-type position sizing: wide directional bets are profitable (+$32 P&L),
+                    // exact/narrow bets lose money (-$28 P&L, 0% resolved win rate)
+                    let bucket_width = bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp;
+                    let bucket_type_factor = if !bucket.temp_bucket.max_temp.is_finite() || !bucket.temp_bucket.min_temp.is_finite() {
+                        // "or higher" / "or lower" — wide directional, best category
+                        1.5
+                    } else if bucket_width <= 2.0 {
+                        // Exact temp or 2-degree range — worst category (0% resolved win rate)
+                        0.2
+                    } else if bucket_width <= 5.0 {
+                        // Medium range (3-5 degrees)
+                        0.5
+                    } else {
+                        // Wide range (>5 degrees)
+                        1.0
+                    };
+                    let raw_kelly_size = raw_kelly_size * bucket_type_factor;
+                    let bucket_type_label = if !bucket.temp_bucket.max_temp.is_finite() || !bucket.temp_bucket.min_temp.is_finite() {
+                        "wide_dir"
+                    } else if bucket_width <= 2.0 {
+                        "narrow"
+                    } else if bucket_width <= 5.0 {
+                        "medium"
+                    } else {
+                        "wide"
+                    };
+
                     // Task 5: Extreme edge warning — reduce position for suspiciously large edges
                     let kelly_size = if edge > 0.30 {
                         scan.buckets_skipped_extreme_edge += 1;
@@ -1140,11 +1170,43 @@ impl WeatherStrategy {
                         continue;
                     }
 
-                    // Place limit order at our fair value price
-                    // Weather markets have wide spreads — we act as makers, not takers
-                    // Bid slightly below our probability to ensure positive EV
-                    let order_price = (our_prob * 0.85 * 100.0).round() / 100.0; // 85% of our fair value, rounded to cents
-                    let order_price = order_price.max(0.01).min(0.95); // clamp to valid range
+                    // Order-book-aware pricing: fetch book and price relative to best ask
+                    // High edge + liquidity = taker (2% fee but guaranteed fill)
+                    // Moderate edge = near-ask limit (likely fills within minutes)
+                    // Low edge = maker at 85% fair value (may not fill)
+                    let order_price = match client.get_order_book(&bucket.token_id).await {
+                        Ok(book) => {
+                            let best_ask = book.asks.first().map(|a| a.price);
+                            let ask_depth: f64 = book.asks.iter().take(3).map(|a| a.size * a.price).sum();
+
+                            match (edge, best_ask, ask_depth) {
+                                // HIGH EDGE + LIQUIDITY: take the ask (taker, guaranteed fill)
+                                (e, Some(ask), depth) if e > 0.25 && depth >= kelly_size && ask <= our_prob => {
+                                    info!("TAKER: edge={:.1}% depth=${:.2} — taking ask at {:.2}",
+                                        e * 100.0, depth, ask);
+                                    ask.min(0.95)
+                                },
+                                // MODERATE EDGE: post 1-2 cents below best ask
+                                (e, Some(ask), _) if e > 0.15 && (ask - 0.02) <= our_prob => {
+                                    let price = ((ask - 0.02) * 100.0).round() / 100.0;
+                                    let price = price.max(0.01).min(0.95);
+                                    info!("NEAR-ASK: edge={:.1}% — posting at {:.2} (ask={:.2})",
+                                        e * 100.0, price, ask);
+                                    price
+                                },
+                                // DEFAULT: maker at 85% fair value
+                                _ => {
+                                    let price = (our_prob * 0.85 * 100.0).round() / 100.0;
+                                    price.max(0.01).min(0.95)
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            debug!("Order book fetch failed: {} — using maker pricing", e);
+                            let price = (our_prob * 0.85 * 100.0).round() / 100.0;
+                            price.max(0.01).min(0.95)
+                        }
+                    };
 
                     // Ensure we still have edge at our order price
                     if our_prob - order_price < 0.04 {
@@ -1165,8 +1227,8 @@ impl WeatherStrategy {
 
                     scan.trades_attempted += 1;
                     println!("  >> WEATHER TRADE: {} | {}", market.question, bucket.label);
-                    println!("     Our P={:.3} | Mid={:.3} | Edge={:.3} | Kelly=${:.2}",
-                        our_prob, market_price, edge, kelly_size);
+                    println!("     Our P={:.3} | Mid={:.3} | Edge={:.3} | Kelly=${:.2} | Type={}",
+                        our_prob, market_price, edge, kelly_size, bucket_type_label);
                     println!("     LIMIT BUY {:.2} YES @ ${:.4} = ${:.2}", shares, order_price, cost);
 
                     let mut captured_order_id: Option<String> = None;

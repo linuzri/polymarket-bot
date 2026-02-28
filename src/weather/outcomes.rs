@@ -98,8 +98,8 @@ pub async fn check_outcomes(http: &reqwest::Client, config: &WeatherConfig) {
             None => continue,
         };
 
-        // Fetch actual temperature
-        let actual_high = match fetch_actual_high(http, city.lat, city.lon, &resolution_date, &city.timezone).await {
+        // Fetch actual temperature (Open-Meteo archive returns Celsius regardless of city)
+        let actual_high_raw = match fetch_actual_high(http, city.lat, city.lon, &resolution_date, &city.timezone).await {
             Ok(Some(temp)) => Some(temp),
             Ok(None) => {
                 debug!("No actual temp available yet for {} on {}", trade.city, resolution_date);
@@ -110,6 +110,12 @@ pub async fn check_outcomes(http: &reqwest::Client, config: &WeatherConfig) {
                 continue;
             }
         };
+
+        // Convert to city's native unit (archive API always returns Celsius)
+        let actual_high = actual_high_raw.map(|t| match city.unit {
+            super::TempUnit::Fahrenheit => super::c_to_f(t),
+            super::TempUnit::Celsius => t,
+        });
 
         let predicted_high = trade.ensemble_mean.or(trade.open_meteo_mean).unwrap_or(0.0);
         let forecast_error = actual_high.map(|a| predicted_high - a);
