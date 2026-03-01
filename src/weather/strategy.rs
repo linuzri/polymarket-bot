@@ -107,6 +107,12 @@ pub struct WeatherTrade {
     /// Probability calculation method: "ensemble", "consensus", or "normal_dist"
     #[serde(default)]
     pub probability_source: Option<String>,
+    /// CTF condition ID for on-chain redemption
+    #[serde(default)]
+    pub condition_id: Option<String>,
+    /// Whether position has been redeemed on-chain (USDC claimed)
+    #[serde(default)]
+    pub redeemed: bool,
 }
 
 /// Scan cycle summary for logging — tracks what was evaluated, skipped, and why
@@ -307,6 +313,7 @@ impl WeatherStrategy {
         trades.iter()
             .filter(|t| !t.dry_run)
             .filter(|t| !t.resolved)
+            .filter(|t| !t.redeemed) // Exclude redeemed positions — capital already reclaimed
             .filter(|t| {
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
                     let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
@@ -316,7 +323,8 @@ impl WeatherStrategy {
                 }
             })
             .map(|t| t.cost)
-            .sum()
+            .sum::<f64>()
+            .max(0.0) // Prevent -0.0 from floating-point rounding
     }
 
     /// Load position keys from strategy_trades.json to prevent duplicate entries
@@ -329,6 +337,7 @@ impl WeatherStrategy {
         trades.iter()
             .filter(|t| !t.dry_run)
             .filter(|t| !t.resolved)
+            .filter(|t| !t.redeemed) // Exclude redeemed positions — market slot freed
             .filter(|t| {
                 // Only consider trades from last 4 days (weather markets are 1-2 days out)
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
@@ -1301,6 +1310,8 @@ impl WeatherStrategy {
                         probability_source: Some(probability_source_diag.clone()),
                         fill_status: None,
                         fill_checked_at: None,
+                        condition_id: Some(market.condition_id.clone()),
+                        redeemed: false,
                     };
 
                     // Telegram notification
@@ -1461,6 +1472,8 @@ impl WeatherStrategy {
                         probability_source: Some(probability_source_diag.clone()),
                         fill_status: None,
                         fill_checked_at: None,
+                        condition_id: Some(market.condition_id.clone()),
+                        redeemed: false,
                     };
 
                     self.trades.push(trade);
