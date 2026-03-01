@@ -103,21 +103,48 @@ pub async fn discover_weather_markets(http: &reqwest::Client) -> Result<Vec<Weat
             let url = format!("https://gamma-api.polymarket.com/events?slug={}", slug);
 
             debug!("Fetching weather market: {}", url);
-            let resp = match http.get(&url).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("Failed to fetch {}: {}", slug, e);
-                    continue;
-                }
-            };
 
-            let events: Vec<GammaWeatherEvent> = match resp.json().await {
-                Ok(e) => e,
-                Err(e) => {
-                    debug!("No event for slug {}: {}", slug, e);
-                    continue;
+            // Retry logic with backoff (max 3 attempts)
+            let mut events: Vec<GammaWeatherEvent> = Vec::new();
+            let max_retries = 3u32;
+            for attempt in 1..=max_retries {
+                match http.get(&url)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => {
+                        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                            warn!("Rate limited by Polymarket API for {} (attempt {}/{})", slug, attempt, max_retries);
+                            if attempt < max_retries {
+                                tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64)).await;
+                                continue;
+                            }
+                        } else if !resp.status().is_success() {
+                            warn!("API returned {} for {} (attempt {}/{})", resp.status(), slug, attempt, max_retries);
+                            if attempt < max_retries {
+                                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+                                continue;
+                            }
+                        } else {
+                            match resp.json::<Vec<GammaWeatherEvent>>().await {
+                                Ok(e) => { events = e; break; }
+                                Err(e) => {
+                                    debug!("No event for slug {}: {}", slug, e);
+                                    break; // Parse error = no event, don't retry
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch {} (attempt {}/{}): {}", slug, attempt, max_retries, e);
+                        if attempt < max_retries {
+                            tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+                            continue;
+                        }
+                    }
                 }
-            };
+            }
 
             for event in &events {
                 if let Some(mut wm) = parse_weather_event(event) {
@@ -133,12 +160,32 @@ pub async fn discover_weather_markets(http: &reqwest::Client) -> Result<Vec<Weat
                     weather_markets.push(wm);
                 }
             }
+
+            // Small delay between date lookups to avoid rate limiting
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
     }
 
     // Deduplicate by condition_id
     weather_markets.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
     weather_markets.dedup_by(|a, b| a.condition_id == b.condition_id);
+
+    // Sanity check: warn if fewer markets than expected
+    let expected_min = WEATHER_CITIES.len();
+    if weather_markets.len() < expected_min {
+        warn!(
+            "LOW MARKET COUNT: Found {} markets but expected at least {} (one per city). API may have timed out.",
+            weather_markets.len(), expected_min
+        );
+        let found_cities: std::collections::HashSet<String> = weather_markets.iter()
+            .filter_map(|m| m.city.clone())
+            .collect();
+        for &(city, _) in WEATHER_CITIES {
+            if !found_cities.contains(city) {
+                warn!("  MISSING: No markets found for {}", city);
+            }
+        }
+    }
 
     info!("Discovered {} weather markets", weather_markets.len());
     Ok(weather_markets)

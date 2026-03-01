@@ -876,7 +876,16 @@ impl WeatherStrategy {
             let forecast = match self.find_matching_forecast(market, &forecasts) {
                 Some(f) => f.clone(),
                 None => {
-                    debug!("No matching forecast for market: {}", market.question);
+                    let market_city = market.city.as_deref().unwrap_or("unknown");
+                    let market_date = market.date.as_deref().unwrap_or("unknown");
+                    let available: Vec<String> = forecasts.iter()
+                        .filter(|f| f.city.to_lowercase() == market_city.to_lowercase())
+                        .map(|f| f.date.clone())
+                        .collect();
+                    warn!(
+                        "NO FORECAST for market: {} | city={} date={} | Available forecast dates: {:?}",
+                        market.question, market_city, market_date, available
+                    );
                     scan.markets_skipped_no_forecast += 1;
                     continue;
                 }
