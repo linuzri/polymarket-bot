@@ -53,12 +53,12 @@ impl OpenMeteoClient {
     pub async fn fetch_forecast(&self, city: &City) -> Result<Vec<CityForecast>> {
         // Try multi-model API first
         let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=gfs_seamless,icon_seamless,ecmwf_ifs025",
-            city.lat, city.lon
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=gfs_seamless,icon_seamless,ecmwf_ifs025&timezone={}",
+            city.lat, city.lon, city.timezone
         );
 
         debug!("Open-Meteo multi-model request for {}: {}", city.name, url);
-        let resp = self.http.get(&url).send().await;
+        let resp = super::fetch_with_retry(&self.http, &url, 3, &format!("Open-Meteo multi-model ({})", city.name)).await;
 
         match resp {
             Ok(r) if r.status().is_success() => {
@@ -86,16 +86,13 @@ impl OpenMeteoClient {
             TempUnit::Celsius => "",
         };
         let fallback_url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3{}",
-            city.lat, city.lon, unit_param
+            "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3{}&timezone={}",
+            city.lat, city.lon, unit_param, city.timezone
         );
 
         debug!("Open-Meteo standard request for {}: {}", city.name, fallback_url);
-        let data: StandardResponse = self.http
-            .get(&fallback_url)
-            .send()
-            .await
-            .context("Open-Meteo request failed")?
+        let fallback_resp = super::fetch_with_retry(&self.http, &fallback_url, 3, &format!("Open-Meteo standard ({})", city.name)).await?;
+        let data: StandardResponse = fallback_resp
             .json()
             .await
             .context("Failed to parse Open-Meteo response")?;
@@ -180,13 +177,12 @@ impl OpenMeteoClient {
     /// Returns a map of date -> Vec<f64> (individual member max temperatures)
     pub async fn fetch_ensemble(&self, city: &City) -> Result<HashMap<String, Vec<f64>>> {
         let url = format!(
-            "https://ensemble-api.open-meteo.com/v1/ensemble?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=ecmwf_ifs025,gfs_seamless,icon_seamless",
-            city.lat, city.lon
+            "https://ensemble-api.open-meteo.com/v1/ensemble?latitude={:.4}&longitude={:.4}&daily=temperature_2m_max&forecast_days=3&models=ecmwf_ifs025,gfs_seamless,icon_seamless&timezone={}",
+            city.lat, city.lon, city.timezone
         );
 
         debug!("Open-Meteo ensemble request for {}: {}", city.name, url);
-        let resp = self.http.get(&url).send().await
-            .context("Ensemble API request failed")?;
+        let resp = super::fetch_with_retry(&self.http, &url, 3, &format!("Ensemble API ({})", city.name)).await?;
         let body: serde_json::Value = resp.json().await
             .context("Failed to parse ensemble response")?;
 

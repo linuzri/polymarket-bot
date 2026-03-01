@@ -25,8 +25,8 @@ pub async fn fetch_current_temp(http: &reqwest::Client, city: &City) -> Result<O
     );
 
     debug!("Fetching current observation for {}", city.name);
-    let resp: CurrentWeatherResponse = http.get(&url).send().await
-        .context("Current weather request failed")?
+    let raw_resp = super::fetch_with_retry(http, &url, 2, &format!("Current observation ({})", city.name)).await?;
+    let resp: CurrentWeatherResponse = raw_resp
         .json().await
         .context("Failed to parse current weather")?;
 

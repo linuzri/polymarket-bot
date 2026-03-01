@@ -61,11 +61,8 @@ impl NoaaClient {
         );
 
         debug!("NOAA points request: {}", points_url);
-        let points: PointsResponse = self.http
-            .get(&points_url)
-            .send()
-            .await
-            .context("NOAA points request failed")?
+        let points_resp = super::fetch_with_retry(&self.http, &points_url, 3, &format!("NOAA points ({})", city.name)).await?;
+        let points: PointsResponse = points_resp
             .json()
             .await
             .context("Failed to parse NOAA points response")?;
@@ -75,11 +72,8 @@ impl NoaaClient {
 
         // Step 2: Fetch the forecast
         debug!("NOAA forecast request: {}", forecast_url);
-        let forecast: ForecastResponse = self.http
-            .get(&forecast_url)
-            .send()
-            .await
-            .context("NOAA forecast request failed")?
+        let forecast_resp = super::fetch_with_retry(&self.http, &forecast_url, 3, &format!("NOAA forecast ({})", city.name)).await?;
+        let forecast: ForecastResponse = forecast_resp
             .json()
             .await
             .context("Failed to parse NOAA forecast response")?;
