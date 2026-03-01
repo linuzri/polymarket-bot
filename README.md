@@ -22,6 +22,14 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
 
+### Mar 1 — Market Discovery Reliability + Auto-Redemption
+
+**Discovery reliability (PR #4):** Added 3-attempt retry with exponential backoff to all Polymarket API calls. 15s timeouts, 429 rate limit detection, 200ms inter-city delay to prevent cascading timeouts. Warns when cities are missing from discovery. No-forecast skips now log city, date, and available forecast dates for diagnosis.
+
+**Auto-redemption (PRs #1-3):** Resolved positions now auto-claimed via Builder relayer (gas-free). Standalone Python script runs as PM2 cron every 30 min. Marks trades as `redeemed: true` in strategy_trades.json, frees capital and market slots for new trades. Telegram notification on each redemption.
+
+**Station verification:** Chicago = KORD (O'Hare) ✅, Dallas = KDAL (Love Field) ✅ — confirmed against actual Polymarket resolution sources.
+
 ### Feb 28 — Phase A: Data-Driven Strategy Overhaul
 
 Deep analysis of 197 on-chain transactions (Feb 12-28) revealed critical insights:
@@ -171,6 +179,7 @@ Fetches individual member trajectories from Open-Meteo Ensemble API:
 - **Telegram notifications** — trade alerts + startup messages + heartbeat
 - **Exposure tracking** — loads unresolved trades from last 4 days on startup
 - **Auto-redemption** — resolved positions auto-claimed via Builder relayer (gas-free, 30-min cycle)
+- **Discovery retry** — 3-attempt retry with backoff on API calls, 200ms inter-city delay, missing city warnings
 
 ## Quick Start
 

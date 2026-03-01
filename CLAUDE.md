@@ -16,6 +16,31 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Phase A:** DEPLOYED Feb 28 — config tuning, bucket-type sizing, order book pricing
 - **Phase B (backlog):** BUY_NO support + cross-bucket mispricing — after 3 days of Phase A data (Mar 3)
 - **Auto-Redeem:** LIVE Mar 1 — Phase 2 Builder relayer (gas-free), replaces manual UI claiming
+- **Station Codes Verified:** Chicago=KORD (O'Hare) ✅, Dallas=KDAL (Love Field) ✅ — confirmed against Polymarket resolution sources
+
+### Mar 1 — Market Discovery Reliability + Diagnostic Logging (PR #4)
+
+**Problem:** Market discovery intermittently dropping cities (26 → 10 markets between scans). "No-forecast" markets not logged by name.
+
+**Task 2 — No-forecast diagnostic logging:**
+- Upgraded from `debug!` to `warn!` with full diagnostic info
+- Logs: market name, city, date, and available forecast dates for that city
+- Enables immediate diagnosis of timezone mismatches vs actual bugs
+- Check with: `pm2 logs polymarket-bot --lines 300 | Select-String "NO FORECAST"`
+
+**Task 1 — Discovery retry logic + rate limit handling:**
+- 3-attempt retry with exponential backoff per API call
+- Explicit 15s timeout on all Polymarket API requests
+- 429 rate limit detection with 5s×attempt backoff
+- 200ms delay between city/date lookups to prevent cascading timeouts
+- Warning when market count drops below expected minimum (1 per city)
+- Logs which specific cities are missing from discovery
+- Check with: `pm2 logs polymarket-bot --lines 300 | Select-String "MISSING|Rate limited|LOW MARKET"`
+
+**Task 3 — Station code verification:**
+- Chicago: KORD (O'Hare) confirmed correct — Polymarket resolves on "Chicago O'Hare Intl Airport Station"
+- Dallas: KDAL (Love Field) confirmed correct — Polymarket resolves on "Dallas Love Field Station"
+- No code change needed
 
 ### Mar 1 — Auto-Redemption System (3 PRs)
 
