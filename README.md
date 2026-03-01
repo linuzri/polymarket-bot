@@ -2,13 +2,13 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Feb 28, 2026)
+## 🔴 Live Trading Status (Mar 1, 2026)
 
-- **Portfolio:** ~$89 USDC cash + ~$26 pending | All-time P/L: **-$10.84**
-- **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss)
+- **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: **-$5.58**
 - **Initial Deposit:** $100.27
 - **Strategy:** 100% Weather Arbitrage — **Phase A data-driven overhaul deployed**
 - **PM2:** `polymarket-bot` **ONLINE** — schedule-aware scanning aligned to weather model releases
+- **PM2:** `polymarket-redeem` **ONLINE** — auto-redeem resolved positions every 30 min (gas-free via Builder relayer)
 - **Cities:** 12 (6 US + 6 international) — Wellington removed (worst city, -$14 P&L)
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
 - **Scan Timing:** 8 windows/day aligned to GFS/ECMWF model releases (15min post-publish) + 120min fallback
@@ -18,6 +18,7 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Config:** 12% min edge (45% for narrow), 45% min probability, 25% Kelly, $15/bucket, $80 max exposure, 2¢ min market price
 - **Bucket-type sizing:** Wide directional 1.5x, exact/narrow 0.2x — based on data showing wide bets +$32 vs exact -$28
 - **Order pricing:** Taker (>25% edge), near-ask (>15% edge), maker (fallback) — replaces static 85% fair value
+- **Auto-Redeem:** Resolved positions auto-claimed via `poly-web3` Builder relayer — gas-free, no manual UI interaction
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
 
@@ -51,6 +52,7 @@ Schedule-aware scan loop (8 windows/day aligned to GFS/ECMWF model releases):
 8. Price orders → Fetch order book: taker for >25% edge, near-ask for >15%, maker fallback
 9. Place orders → BUY YES with order-book-aware pricing
 10. Resolution → 1-2 days, slug-based Gamma API detection
+11. Auto-redeem → Separate PM2 process checks every 30 min, redeems via Builder relayer (gas-free)
 ```
 
 ## Why Weather Markets?
@@ -82,8 +84,10 @@ polymarket-bot/
 │   ├── notifications/mod.rs  # Telegram alerts
 │   └── main.rs               # CLI entry point
 ├── weather_multi_source.py   # Python multi-source forecasting (5 models + bias correction)
+├── redeem_positions.py       # Auto-redeem resolved positions via Builder relayer (PM2 cron)
+├── trade_outcomes.jsonl      # Redemption P/L log
 ├── config.toml               # Strategy configuration
-└── .env                      # Wallet keys (never committed)
+└── .env                      # Wallet keys + Builder API creds (never committed)
 ```
 
 ## Cities Tracked
@@ -166,6 +170,7 @@ Fetches individual member trajectories from Open-Meteo Ensemble API:
 - **Forecast buffer** — skips borderline bets where forecast is within 3°F/2°C of threshold
 - **Telegram notifications** — trade alerts + startup messages + heartbeat
 - **Exposure tracking** — loads unresolved trades from last 4 days on startup
+- **Auto-redemption** — resolved positions auto-claimed via Builder relayer (gas-free, 30-min cycle)
 
 ## Quick Start
 
@@ -183,8 +188,13 @@ polymarket-bot.exe weather --once
 pm2 start ecosystem.config.js --only polymarket-bot
 pm2 save
 
+# Auto-redeem (PM2 cron, every 30 min)
+pm2 start redeem_positions.py --name polymarket-redeem --interpreter python --cron-restart "*/30 * * * *" --no-autorestart
+pm2 save
+
 # Check status
 pm2 logs polymarket-bot --lines 20
+pm2 logs polymarket-redeem --lines 20
 ```
 
 ## Key Insight: Be a Maker, Not a Taker

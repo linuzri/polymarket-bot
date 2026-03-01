@@ -3,10 +3,11 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** â€" uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Feb 28, 2026)
-- **Portfolio:** ~$89 USDC cash + ~$26 pending positions | All-time P&L: -$10.84
+## Current Status (Mar 1, 2026)
+- **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: -$5.58
 - **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss; Seoul +$30.48 was biggest win)
 - **PM2:** `polymarket-bot` ONLINE — Phase A deployed, schedule-aware scanning
+- **PM2:** `polymarket-redeem` ONLINE — auto-redeem every 30 min via Builder relayer (gas-free)
 - **Telegram:** Trade alerts + weekly P&L summary (Sundays midnight UTC)
 - **polymarket-arb:** STOPPED (sniper/arb strategies paused)
 - **Max Exposure:** $80 (raised from $60 after batch sell recovered funds)
@@ -14,7 +15,57 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Wellington:** REMOVED — worst city (-$14.02 on $17.32, 0 wins)
 - **Phase A:** DEPLOYED Feb 28 — config tuning, bucket-type sizing, order book pricing
 - **Phase B (backlog):** BUY_NO support + cross-bucket mispricing — after 3 days of Phase A data (Mar 3)
-- **Phase C (backlog):** Auto-redeem, forecast delta, afternoon aggressive mode — after 1 week (Mar 7)
+- **Auto-Redeem:** LIVE Mar 1 — Phase 2 Builder relayer (gas-free), replaces manual UI claiming
+
+### Mar 1 — Auto-Redemption System (3 PRs)
+
+**Problem:** Resolved positions required manual claiming on Polymarket UI. Capital sat idle until manually redeemed.
+
+**Solution:** Standalone Python redemption script + Rust bot changes, running as separate PM2 process.
+
+**PR #1 — Rust: WeatherTrade fields for redemption**
+- Added `condition_id: Option<String>` — CTF condition ID needed for `redeemPositions()` call
+- Added `redeemed: bool` — tracks whether USDC has been claimed on-chain
+- Both use `#[serde(default)]` for backward compatibility with existing trades
+- `load_existing_exposure()` excludes redeemed positions → frees capital
+- `load_open_position_keys()` excludes redeemed positions → frees market slots
+
+**PR #2 — Phase 1: Direct on-chain redemption (superseded by PR #3)**
+- `redeem_positions.py` calling `redeemPositions()` via proxy wallet's `proxy()` function
+- Required MATIC for gas on EOA — blocker since EOA had 0 MATIC
+
+**PR #3 — Phase 2: Builder relayer upgrade (LIVE)**
+- Replaced Phase 1 with `poly-web3` Builder relayer (gas-free, no MATIC needed)
+- Uses `service.redeem(condition_id)` for per-trade redemption (Approach A)
+- Builder API credentials (key/secret/passphrase) in `.env`
+- Correct P/L: `shares × $1.00` for wins, `$0` for losses (not cost-based)
+- Relayer health check at startup
+- Rate limit cap: 5 redemptions per cycle
+- Phase 1 code preserved as commented fallback
+
+**Key architecture decisions:**
+- Separate PM2 process (`polymarket-redeem`), NOT subprocess of Rust bot
+- 30-min cron cycle via `--cron-restart "*/30 * * * *"` + `--no-autorestart`
+- Reads `strategy_trades.json` for candidates: non-dry-run, not redeemed, has condition_id, >12h old
+- Resolution check via Gamma API (outcomePrices + resolved flag)
+- Updates `strategy_trades.json` with `redeemed: true` after successful redemption
+- Logs to `trade_outcomes.jsonl` with per-trade P/L
+- Telegram notification on each redemption
+
+**Important distinctions:**
+- `resolved` = market settled (set by Rust bot's `check_and_mark_resolved()`)
+- `redeemed` = USDC claimed back (set by Python redemption script)
+- A trade can be resolved but not yet redeemed — that's the window the script closes
+- Both fields exclude from exposure, but only `redeemed` triggers P/L logging
+
+**Proxy wallet details:**
+- Type: Polymarket ProxyWallet (Solidity ^0.5.0, Magic/email type, signature_type=1)
+- Address: 0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853
+- Owner: EOA (0x7ec329D34D2c94456c015B236EBEc41d2a7B3Bce)
+- Function: `proxy(ProxyCall[] memory calls) public payable onlyOwner`
+- Factory: 0xaB45c5A4B0c941a2F231C04C3f49182e1A254052
+
+**Note:** Old trades (pre-Mar 1) have `condition_id: null` — redemption script skips them. Only new trades going forward are eligible for auto-redemption.
 
 ### Feb 28 — Phase A: Data-Driven Strategy Overhaul
 
@@ -108,7 +159,7 @@ Based on competitive analysis of 7+ active weather bots, 5 top traders ($2M+ com
 | **Supabase key** | Updated to new `sb_secret_` format (old JWT keys deprecated by Supabase). |
 
 ### Known Limitations
-- No auto-redeem — PolymarketClient has no redeem/settle/merge methods
+- Legacy trades (pre-Mar 1) have no `condition_id` — cannot be auto-redeemed, must claim manually or wait for 4-day exposure window expiry
 - Legacy trades (pre-Feb 22) in strategy_trades.json have no `market_slug` — resolution falls back to substring matching
 - `resolution_temp` placeholder — needs Weather Underground API key for actual lookup
 
@@ -159,8 +210,10 @@ polymarket-bot/
 â"œâ"€â"€ config.toml                 # Strategy configuration
 â"œâ"€â"€ ecosystem.config.js         # PM2 config (polymarket-bot â†' weather)
 â"œâ"€â"€ strategy_trades.json        # Trade log (crash-safe, per-trade writes)
+â"œâ"€â"€ redeem_positions.py         # Auto-redeem via Builder relayer (PM2 cron, 30 min)
+â"œâ"€â"€ trade_outcomes.jsonl        # Redemption P/L log (appended by redeem script)
 â"œâ"€â"€ weather_multi_source.py     # Python multi-source forecasting (5 models + bias correction)
-â""â"€â"€ .env                        # Wallet keys + Telegram token (NEVER commit)
+â""â"€â"€ .env                        # Wallet keys + Builder API creds + Telegram token (NEVER commit)
 ```
 
 ## Key Patterns
@@ -180,6 +233,8 @@ pub struct WeatherTrade {
     pnl: Option<f64>,            // profit/loss in USDC
     resolution_temp: Option<f64>,// actual high temp (placeholder)
     token_id: Option<String>,    // for CLOB fill checking
+    condition_id: Option<String>,// CTF condition ID for on-chain redemption (added Mar 1)
+    redeemed: bool,              // USDC claimed on-chain via redeem script (added Mar 1)
 }
 ```
 
@@ -220,15 +275,19 @@ pub struct WeatherTrade {
 
 ## Commands
 ```bash
-# Weather (primary â€" PM2 managed)
+# Weather bot (primary â€" PM2 managed)
 pm2 start ecosystem.config.js --only polymarket-bot
 pm2 logs polymarket-bot --lines 20
 pm2 restart polymarket-bot
 
+# Auto-redeem (PM2 cron, 30 min cycle)
+pm2 start redeem_positions.py --name polymarket-redeem --interpreter python --cron-restart "*/30 * * * *" --no-autorestart
+pm2 logs polymarket-redeem --lines 20
+
 # Manual runs
 polymarket-bot.exe weather --once          # Single live scan
 polymarket-bot.exe weather --dry-run --once # Test without orders
-polymarket-bot.exe weather                  # Continuous loop (use PM2 instead)
+python redeem_positions.py                  # Manual redemption run
 ```
 
 ## Workflow Orchestration
