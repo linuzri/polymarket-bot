@@ -7,7 +7,44 @@ pub mod outcomes;
 pub mod strategy;
 
 use std::collections::HashMap;
+use std::time::Duration;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
+
+/// Fetch an HTTP URL with retry and exponential backoff.
+/// Shared utility for all weather API calls (Open-Meteo, NOAA, Ensemble, observations).
+pub async fn fetch_with_retry(
+    http: &reqwest::Client,
+    url: &str,
+    max_retries: u32,
+    label: &str,
+) -> Result<reqwest::Response> {
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match http.get(url).timeout(Duration::from_secs(15)).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    return Ok(resp);
+                }
+                let status = resp.status();
+                if attempt >= max_retries {
+                    anyhow::bail!("{} returned {} after {} attempts", label, status, max_retries);
+                }
+                warn!("{} returned {} (attempt {}/{})", label, status, attempt, max_retries);
+                tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
+            }
+            Err(e) => {
+                if attempt >= max_retries {
+                    anyhow::bail!("{} failed after {} attempts: {}", label, max_retries, e);
+                }
+                warn!("{} request failed (attempt {}/{}): {}", label, attempt, max_retries, e);
+                tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
+            }
+        }
+    }
+}
 
 /// Scan schedule configuration aligned with weather model releases
 #[derive(Debug, Clone, Deserialize, Serialize)]
