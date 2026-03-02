@@ -1139,7 +1139,7 @@ impl WeatherStrategy {
                     }
 
                     // Kelly criterion position sizing
-                    let raw_kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
+                    let base_kelly_size = self.calculate_kelly_size(our_prob, market_price, edge);
 
                     // Bucket-type position sizing: wide directional bets are profitable (+$32 P&L),
                     // exact/narrow bets lose money (-$28 P&L, 0% resolved win rate)
@@ -1157,7 +1157,7 @@ impl WeatherStrategy {
                         // Wide range (>5 degrees)
                         1.0
                     };
-                    let raw_kelly_size = raw_kelly_size * bucket_type_factor;
+                    let raw_kelly_size = base_kelly_size * bucket_type_factor;
                     let bucket_type_label = if !bucket.temp_bucket.max_temp.is_finite() || !bucket.temp_bucket.min_temp.is_finite() {
                         "wide_dir"
                     } else if bucket_width <= 2.0 {
@@ -1183,8 +1183,12 @@ impl WeatherStrategy {
                         raw_kelly_size
                     };
 
+
+                    // Floor: never reduce below 15% of base Kelly size.
+                    // Prevents narrow(0.2) x extreme(0.5) = 0.1x from killing viable trades.
+                    let kelly_size = kelly_size.max(base_kelly_size * 0.15);
                     if kelly_size < 0.50 {
-                        debug!("Kelly size too small (${:.2}) -- skipping", kelly_size);
+                        warn!("TRADE BLOCKED: {} | {} | Kelly size too small (${:.2})", market.question, bucket.label, kelly_size);
                         continue;
                     }
 
@@ -1196,6 +1200,13 @@ impl WeatherStrategy {
                         Ok(book) => {
                             let best_ask = book.asks.first().map(|a| a.price);
                             let ask_depth: f64 = book.asks.iter().take(3).map(|a| a.size * a.price).sum();
+
+                            // Log order book state for edge trades
+                            info!("BOOK: {} | best_ask={} depth=${:.2} | our_prob={:.2} kelly=${:.2}",
+                                bucket.label,
+                                best_ask.map_or("EMPTY".to_string(), |a| format!("{:.3}", a)),
+                                ask_depth, our_prob, kelly_size
+                            );
 
                             match (edge, best_ask, ask_depth) {
                                 // HIGH EDGE + LIQUIDITY: take the ask (taker, guaranteed fill)
@@ -1212,36 +1223,55 @@ impl WeatherStrategy {
                                         e * 100.0, price, ask);
                                     price
                                 },
-                                // DEFAULT: maker at 85% fair value
+                                // DEFAULT: maker at 85% fair value, but cap relative to market mid
                                 _ => {
-                                    let price = (our_prob * 0.85 * 100.0).round() / 100.0;
-                                    price.max(0.01).min(0.95)
+                                    let maker_price = (our_prob * 0.85 * 100.0).round() / 100.0;
+                                    // On cheap buckets (<20c), don't bid more than 2x the market mid.
+                                    // A 15c bucket with a 56c bid will never fill and wastes the edge.
+                                    let price = if market_price < 0.20 {
+                                        maker_price.min(market_price * 2.0)
+                                    } else {
+                                        maker_price
+                                    };
+                                    let price = price.max(0.01).min(0.95);
+                                    info!("MAKER: our_prob={:.2} market_mid={:.2} — posting at {:.2}",
+                                        our_prob, market_price, price);
+                                    price
                                 }
                             }
                         },
                         Err(e) => {
-                            debug!("Order book fetch failed: {} — using maker pricing", e);
-                            let price = (our_prob * 0.85 * 100.0).round() / 100.0;
+                            warn!("Order book fetch failed: {} — using maker pricing", e);
+                            let maker_price = (our_prob * 0.85 * 100.0).round() / 100.0;
+                            let price = if market_price < 0.20 {
+                                maker_price.min(market_price * 2.0)
+                            } else {
+                                maker_price
+                            };
                             price.max(0.01).min(0.95)
                         }
                     };
 
                     // Ensure we still have edge at our order price
                     if our_prob - order_price < 0.04 {
-                        debug!("Edge too thin at order price ${:.2} vs prob {:.2}", order_price, our_prob);
+                        warn!("TRADE BLOCKED: {} | {} | Edge too thin at order price ${:.2} vs prob {:.3}",
+                            market.question, bucket.label, order_price, our_prob);
                         continue;
                     }
 
                     let shares = kelly_size / order_price;
                     let shares = (shares * 100.0).floor() / 100.0;
 
-                    // Polymarket minimum order size is typically 5 shares
-                    if shares < 5.0 {
-                        debug!("Shares below minimum ({})", shares);
+                    let cost = shares * order_price;
+
+                    // Minimum order: $1.00 USD or 1 share, whichever is larger.
+                    // Previous 5-share minimum was inconsistent — $0.75 on cheap buckets
+                    // but $4.25 on expensive ones. Dollar floor is more principled.
+                    if cost < 1.00 || shares < 1.0 {
+                        warn!("TRADE BLOCKED: {} | {} | Order too small: {:.2} shares @ ${:.4} = ${:.2}",
+                            market.question, bucket.label, shares, order_price, cost);
                         continue;
                     }
-
-                    let cost = shares * order_price;
 
                     scan.trades_attempted += 1;
                     println!("  >> WEATHER TRADE: {} | {}", market.question, bucket.label);
