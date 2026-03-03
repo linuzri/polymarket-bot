@@ -5,6 +5,7 @@ pub mod markets;
 pub mod observations;
 pub mod outcomes;
 pub mod strategy;
+pub mod calibration;
 
 use std::collections::HashMap;
 use std::time::Duration;
