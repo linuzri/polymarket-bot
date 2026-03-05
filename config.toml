@@ -55,7 +55,8 @@ enable_laddering = false
 ladder_amount_per_bucket = 2.0       # USD per bucket in ladder mode
 ladder_max_buckets = 5               # Max buckets to buy in a single market
 ladder_min_model_prob = 0.05         # Only ladder buckets with >=5% model probability
-ladder_max_market_price = 0.15       # Only buy buckets priced at or below 15 cents
+ladder_max_market_price = 0.15
+max_per_bucket_hard_cap = 4.0        # Hard cap: no single bucket gets more than $4       # Only buy buckets priced at or below 15 cents
 
 [weather.scan_schedule]
 # Trigger scans aligned with model release times (UTC hours)

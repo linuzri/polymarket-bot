@@ -13,6 +13,7 @@ use super::forecast::{self, TempBucket};
 use super::markets::{self, WeatherMarket};
 use super::noaa::NoaaClient;
 use super::open_meteo::OpenMeteoClient;
+use super::position_monitor;
 use super::{City, CityForecast, ScanSchedule, TempUnit, WeatherConfig, get_cities};
 
 /// Calculate the next scan time based on model release schedule
@@ -114,6 +115,12 @@ pub struct WeatherTrade {
     /// Whether position has been redeemed on-chain (USDC claimed)
     #[serde(default)]
     pub redeemed: bool,
+    /// Whether the market uses the neg-risk exchange contract
+    #[serde(default)]
+    pub neg_risk: bool,
+    /// Whether this position was auto-exited by the position monitor
+    #[serde(default)]
+    pub auto_exited: bool,
 }
 
 /// Scan cycle summary for logging â€” tracks what was evaluated, skipped, and why
@@ -312,6 +319,24 @@ fn narrow_bucket_insufficient_ensemble(
         TempUnit::Celsius    => 3.0_f64,
     };
     range <= narrow_threshold && ensemble_count < 5
+}
+
+
+/// v7 Task 2: Southern Hemisphere seasonal warm bias correction.
+fn southern_hemisphere_seasonal_correction(
+    southern_hemisphere: bool,
+    month: u32,
+    betting_cool: bool,
+) -> f64 {
+    if !southern_hemisphere {
+        return 1.0;
+    }
+    let is_sh_summer = matches!(month, 12 | 1 | 2 | 3);
+    if is_sh_summer && betting_cool {
+        0.75
+    } else {
+        1.0
+    }
 }
 
 /// Weather strategy runner
@@ -921,6 +946,16 @@ impl WeatherStrategy {
         let mut trades_placed = 0u32;
         let client = PolymarketClient::new()?;
 
+        // v7 Task 3: Check open positions for price deterioration and auto-exit
+        if let Err(e) = position_monitor::check_and_exit_deteriorated_positions(
+            &client,
+            &self.notifier,
+            self.dry_run,
+        ).await {
+            warn!("Position monitor error: {}", e);
+        }
+
+
         // Pre-load open position keys ONCE (was loading per-bucket â€” 224 file reads/scan)
         let file_position_keys = Self::load_open_position_keys();
 
@@ -1150,6 +1185,36 @@ impl WeatherStrategy {
                 // Task 4: Clamp probability to [0.02, 0.95]
                 let our_prob = clamp_probability(our_prob);
 
+                // v7 Task 2: Southern Hemisphere seasonal warm bias correction
+                let betting_cool = if !bucket.temp_bucket.min_temp.is_finite() {
+                    true  // cumulative below
+                } else if !bucket.temp_bucket.max_temp.is_finite() {
+                    false // cumulative above
+                } else {
+                    let bucket_mid = (bucket.temp_bucket.min_temp + bucket.temp_bucket.max_temp) / 2.0;
+                    let ens_mean = ensemble_mean_diag.unwrap_or(adjusted_forecast.high_temp);
+                    bucket_mid < ens_mean
+                };
+                let city_for_sh: Option<&City> = market.city.as_deref()
+                    .and_then(|cn| cities.iter().find(|c| c.name == cn));
+                let market_month: Option<u32> = market.date.as_deref()
+                    .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                    .map(|d| d.month());
+                let sh_correction = if let (Some(city), Some(month)) = (city_for_sh, market_month) {
+                    southern_hemisphere_seasonal_correction(city.southern_hemisphere, month, betting_cool)
+                } else {
+                    1.0
+                };
+                let our_prob = if sh_correction < 1.0 {
+                    info!(
+                        "SH SEASONAL CORRECTION: {} {} | prob {:.3} -> {:.3} (factor {:.2})",
+                        forecast.city, bucket.label, our_prob, our_prob * sh_correction, sh_correction
+                    );
+                    (our_prob * sh_correction).clamp(0.02, 0.95)
+                } else {
+                    our_prob
+                };
+
                 // Minimum probability filter â€” skip low-confidence predictions
                 if our_prob < self.config.min_our_probability {
                     debug!("SKIP: {} our_prob {:.3} below minimum {:.3}",
@@ -1160,6 +1225,20 @@ impl WeatherStrategy {
 
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
+
+                // v7 Task 2: Hard skip for SH summer cool bets with weak edge
+                let is_sh_summer = city_for_sh
+                    .map(|c| c.southern_hemisphere)
+                    .unwrap_or(false)
+                    && market_month.map(|m| matches!(m, 12 | 1 | 2 | 3)).unwrap_or(false);
+                if is_sh_summer && betting_cool && edge < 0.25 {
+                    info!(
+                        "SH SUMMER COOL SKIP: {} {} | edge={:.3} below 0.25 threshold",
+                        forecast.city, bucket.label, edge
+                    );
+                    scan.buckets_skipped_no_edge += 1;
+                    continue;
+                }
 
                 // Task 6: Narrow bucket ensemble check â€” require >= 5 members for tight ranges
                 if narrow_bucket_insufficient_ensemble(&bucket.temp_bucket, market.unit, ensemble_count_diag) {
@@ -1266,6 +1345,16 @@ impl WeatherStrategy {
 
                     let cv_factor: f64 = (1.0_f64 - edge_cv).max(0.10); // Floor: never below 10% of base Kelly
                     let kelly_size = base_kelly_size * cv_factor;
+
+                    // v7 Task 1: Hard per-bucket cap
+                    let kelly_size_before_cap = kelly_size;
+                    let kelly_size = kelly_size.min(self.config.max_per_bucket_hard_cap);
+                    if kelly_size < kelly_size_before_cap {
+                        info!(
+                            "BUCKET CAP APPLIED: {} | cv-kelly=${:.2} -> capped at ${:.2}",
+                            bucket.label, kelly_size_before_cap, kelly_size
+                        );
+                    }
 
                     // Bucket type label for logging only (no longer affects sizing)
                     let bucket_width = bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp;
@@ -1447,6 +1536,8 @@ impl WeatherStrategy {
                         fill_checked_at: None,
                         condition_id: Some(market.condition_id.clone()),
                         redeemed: false,
+                        neg_risk: market.neg_risk,
+                        auto_exited: false,
                     };
 
                     // Telegram notification
@@ -1616,6 +1707,8 @@ impl WeatherStrategy {
                         fill_checked_at: None,
                         condition_id: Some(market.condition_id.clone()),
                         redeemed: false,
+                        neg_risk: market.neg_risk,
+                        auto_exited: false,
                     };
 
                     self.trades.push(trade);
