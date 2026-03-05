@@ -39,7 +39,7 @@ open_meteo_bias_f = 0.0     # Open-Meteo raw model bias correction (°F). Set to
 open_meteo_bias_c = 0.0     # Open-Meteo raw model bias correction (°C). Set to 0 = no correction.
 min_market_price = 0.02     # Was 0.05 — opens cheap wide buckets (gopfan2 strategy)
 min_edge_narrow = 0.45      # Was 0.25 — INCREASED: exact/narrow bets had 0% resolved win rate
-min_our_probability = 0.45  # Was 0.60 — wide buckets often 45-55% prob but have huge edge
+min_our_probability = 0.60  # Raised back to default — enforce 60% probability gate
 # Minimum degrees between forecast and bucket threshold to avoid borderline bets
 forecast_buffer_f = 2.0   # Was 3.0 — less aggressive filtering
 forecast_buffer_c = 1.0   # Was 2.0 — less aggressive filtering

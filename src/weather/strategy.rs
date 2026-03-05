@@ -1218,14 +1218,6 @@ impl WeatherStrategy {
                     our_prob
                 };
 
-                // Minimum probability filter â€” skip low-confidence predictions
-                if our_prob < self.config.min_our_probability {
-                    debug!("SKIP: {} our_prob {:.3} below minimum {:.3}",
-                        bucket.label, our_prob, self.config.min_our_probability);
-                    scan.buckets_skipped_low_prob += 1;
-                    continue;
-                }
-
                 // Edge = our probability - market price
                 let edge = our_prob - market_price;
 
@@ -1310,6 +1302,14 @@ impl WeatherStrategy {
                     resolution: None,
                 };
                 log_calibration_entry(&cal_entry);
+
+                // Minimum probability gate — after calibration so filtered buckets are still logged
+                if our_prob < self.config.min_our_probability {
+                    warn!("TRADE BLOCKED (prob gate): {} | our_prob={:.2} < min={:.2}",
+                        bucket.label, our_prob, self.config.min_our_probability);
+                    scan.buckets_skipped_low_prob += 1;
+                    continue;
+                }
 
                 if edge >= required_edge {
                     info!(
@@ -1452,14 +1452,10 @@ impl WeatherStrategy {
 
                     let cost = shares * order_price;
 
-                    // Minimum order: $1.00 USD or 1 share, whichever is larger.
-                    // Previous 5-share minimum was inconsistent â€” $0.75 on cheap buckets
-                    // but $4.25 on expensive ones. Dollar floor is more principled.
-                    if cost < 1.00 || shares < 1.0 {
-                        warn!("TRADE BLOCKED: {} | {} | Order too small: {:.2} shares @ ${:.4} = ${:.2}",
-                            market.question, bucket.label, shares, order_price, cost);
-                        continue;
-                    }
+                    // Dollar floor
+                    if cost < 1.00 { warn!("TRADE BLOCKED: cost ${:.2} below $1.00 minimum", cost); continue; }
+                    // CLOB 5-share minimum
+                    if shares < 5.0 { warn!("TRADE BLOCKED: {:.2} shares below Polymarket minimum of 5 (cost=${:.2})", shares, cost); continue; }
 
                     scan.trades_attempted += 1;
                     println!("  >> WEATHER TRADE: {} | {}", market.question, bucket.label);
