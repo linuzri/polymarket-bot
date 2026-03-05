@@ -10,7 +10,8 @@ use crate::orders::{self, Side};
 use super::strategy::WeatherTrade;
 
 const EXIT_PRICE_RATIO_THRESHOLD: f64 = 0.50;
-const MIN_HOURS_OLD: f64 = 10.0;
+/// Only exit within this many hours of resolution
+const EXIT_HOURS_TO_RESOLUTION: f64 = 14.0;
 const MIN_EXIT_VALUE_USD: f64 = 0.50;
 
 pub async fn check_and_exit_deteriorated_positions(
@@ -39,18 +40,22 @@ pub async fn check_and_exit_deteriorated_positions(
             _ => continue,
         };
 
-        let trade_time = match trade.timestamp.parse::<chrono::DateTime<chrono::FixedOffset>>() {
-            Ok(t) => t.with_timezone(&Utc),
-            Err(_) => {
-                match chrono::NaiveDateTime::parse_from_str(&trade.timestamp, "%Y-%m-%dT%H:%M:%S%.f") {
-                    Ok(ndt) => ndt.and_utc(),
-                    Err(_) => continue,
-                }
-            }
+        // Parse market resolution date to compute hours remaining
+        let resolution_date = match &trade.market_date {
+            Some(d) => match chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+                Ok(date) => date,
+                Err(_) => continue,
+            },
+            None => continue, // No market_date = old trade, skip
         };
-
-        let hours_since_trade = (now - trade_time).num_minutes() as f64 / 60.0;
-        if hours_since_trade < MIN_HOURS_OLD {
+        // Weather markets resolve end-of-day UTC (roughly 23:59 UTC on market_date)
+        let resolution_time = resolution_date
+            .and_hms_opt(23, 59, 0)
+            .unwrap()
+            .and_utc();
+        let hours_to_resolution = (resolution_time - now).num_minutes() as f64 / 60.0;
+        // Skip if already resolved or too far from resolution
+        if hours_to_resolution < 0.0 || hours_to_resolution > EXIT_HOURS_TO_RESOLUTION {
             continue;
         }
 
@@ -76,9 +81,9 @@ pub async fn check_and_exit_deteriorated_positions(
 
         if should_exit {
             warn!(
-                "EXIT TRIGGER: {} {} | cost={:.3} current={:.3} ratio={:.2} value=${:.2} hrs_old={:.1}",
+                "EXIT TRIGGER: {} {} | cost={:.3} current={:.3} ratio={:.2} value=${:.2} hrs_left={:.1}",
                 trade.market_question, trade.bucket_label,
-                cost_per_share, current_price, price_ratio, current_value, hours_since_trade
+                cost_per_share, current_price, price_ratio, current_value, hours_to_resolution
             );
 
             if dry_run {
@@ -112,8 +117,8 @@ pub async fn check_and_exit_deteriorated_positions(
                     );
 
                     let reason = format!(
-                        "Price dropped to {:.0} pct of cost ({:.1}h old)",
-                        price_ratio * 100.0, hours_since_trade
+                        "Price dropped to {:.0} pct of cost ({:.1}h to resolution)",
+                        price_ratio * 100.0, hours_to_resolution
                     );
                     notifier.notify_sell(
                         &format!("{} {}", trade.market_question, trade.bucket_label),

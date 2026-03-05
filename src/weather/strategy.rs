@@ -121,6 +121,9 @@ pub struct WeatherTrade {
     /// Whether this position was auto-exited by the position monitor
     #[serde(default)]
     pub auto_exited: bool,
+    /// Market resolution date (YYYY-MM-DD) for position monitor exit timing
+    #[serde(default)]
+    pub market_date: Option<String>,
 }
 
 /// Scan cycle summary for logging â€” tracks what was evaluated, skipped, and why
@@ -1538,6 +1541,7 @@ impl WeatherStrategy {
                         redeemed: false,
                         neg_risk: market.neg_risk,
                         auto_exited: false,
+                        market_date: market.date.clone(),
                     };
 
                     // Telegram notification
@@ -1709,6 +1713,7 @@ impl WeatherStrategy {
                         redeemed: false,
                         neg_risk: market.neg_risk,
                         auto_exited: false,
+                        market_date: market.date.clone(),
                     };
 
                     self.trades.push(trade);
