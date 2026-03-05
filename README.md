@@ -19,8 +19,20 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Bucket-type sizing:** Wide directional 1.5x, exact/narrow 0.2x — based on data showing wide bets +$32 vs exact -$28
 - **Order pricing:** Taker (>25% edge), near-ask (>15% edge), maker (fallback) — replaces static 85% fair value
 - **Auto-Redeem:** Resolved positions auto-claimed via `poly-web3` Builder relayer — gas-free, no manual UI interaction
+- **v7 Position Controls (Mar 5):** Per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
+- **v7.1:** Position monitor uses actual market resolution date for exit timing
+- **CV-Kelly (v6):** Position sizing adjusted by ensemble coefficient of variation
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
+
+### Mar 5 — v7: Position Controls + v7.1 Resolution Timing
+
+Three targeted fixes based on real losses:
+1. **Per-bucket hard cap ($4)** — CV-Kelly no longer concentrates $10+ in one bucket. Ankara-style over-sizing impossible.
+2. **Southern Hemisphere bias correction** — 0.75x probability for cool bets in BA/Wellington/Sydney during Dec-Mar. Hard skip for weak-edge SH summer cool bets.
+3. **Auto-exit position monitor** — Sells deteriorated positions (price < 50% cost, within 14h of resolution). Recovers capital instead of holding to zero.
+
+v7.1 same-day patch: Uses actual `market_date` for resolution timing instead of position age proxy.
 
 ### Mar 1 — Market Discovery Reliability + Auto-Redemption
 
@@ -179,6 +191,9 @@ Fetches individual member trajectories from Open-Meteo Ensemble API:
 - **Telegram notifications** — trade alerts + startup messages + heartbeat
 - **Exposure tracking** — loads unresolved trades from last 4 days on startup
 - **Auto-redemption** — resolved positions auto-claimed via Builder relayer (gas-free, 30-min cycle)
+- **Per-bucket hard cap** — $4 max per bucket regardless of Kelly output
+- **SH seasonal correction** — reduces probability for cool bets in Southern Hemisphere during summer
+- **Auto-exit monitor** — sells positions at >50% loss within 14h of resolution
 - **Discovery retry** — 3-attempt retry with backoff on API calls, 200ms inter-city delay, missing city warnings
 
 ## Quick Start

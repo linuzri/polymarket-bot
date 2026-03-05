@@ -3,7 +3,7 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** â€" uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Mar 1, 2026)
+## Current Status (Mar 5, 2026)
 - **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: -$5.58
 - **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss; Seoul +$30.48 was biggest win)
 - **PM2:** `polymarket-bot` ONLINE — Phase A deployed, schedule-aware scanning
@@ -13,10 +13,55 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Max Exposure:** $80 (raised from $60 after batch sell recovered funds)
 - **Laddering:** DISABLED (34 orders placed, 0 fills)
 - **Wellington:** REMOVED — worst city (-$14.02 on $17.32, 0 wins)
+- **v7:** DEPLOYED Mar 5 — per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
+- **v7.1:** DEPLOYED Mar 5 — position monitor uses actual hours-to-resolution instead of position age
 - **Phase A:** DEPLOYED Feb 28 — config tuning, bucket-type sizing, order book pricing
 - **Phase B (backlog):** BUY_NO support + cross-bucket mispricing — after 3 days of Phase A data (Mar 3)
 - **Auto-Redeem:** LIVE Mar 1 — Phase 2 Builder relayer (gas-free), replaces manual UI claiming
 - **Station Codes Verified:** Chicago=KORD (O'Hare) ✅, Dallas=KDAL (Love Field) ✅ — confirmed against Polymarket resolution sources
+
+### Mar 5 — v7: Position Controls (PR #10) + v7.1 Patch
+
+**Three fixes for three real losses:**
+
+**Task 1: Per-Bucket Hard Cap ($4)**
+- `max_per_bucket_hard_cap = 4.0` in config, `kelly_size.min(config.max_per_bucket_hard_cap)` after CV-Kelly
+- Prevents CV-Kelly from concentrating $10+ in a single bucket (Ankara $11.19 incident)
+- Normal $1-3 bets unaffected, only caps when ensemble agreement drives cv_factor near 1.0
+- Log: `BUCKET CAP APPLIED: {bucket} | cv-kelly=${before} -> capped at ${after}`
+
+**Task 2: Southern Hemisphere Seasonal Bias Correction**
+- `southern_hemisphere: bool` added to `City` struct (Buenos Aires, Wellington, Sydney, Sao Paulo = true)
+- `southern_hemisphere_seasonal_correction()` — 0.75x probability multiplier for cool bets in SH cities Dec-Mar
+- Hard skip: SH summer cool bets with edge < 0.25 after correction are blocked entirely
+- Warm-outcome bets and Northern Hemisphere cities completely unaffected
+- Logs: `SH SEASONAL CORRECTION` and `SH SUMMER COOL SKIP`
+
+**Task 3: Automated Position Exit on Price Deterioration**
+- New file: `src/weather/position_monitor.rs`
+- Runs once per scan cycle before market evaluation
+- Sells if: current price < 50% of cost basis AND resolution within 14 hours AND recoverable value >= $0.50
+- Uses `market_date` field (v7.1) to compute actual hours-to-resolution (end-of-day UTC)
+- Places SELL via `orders::place_order()` with `Side::Sell` at current market price
+- Marks trade as `auto_exited: true`, `outcome: "AUTO_EXIT"` in strategy_trades.json
+- Telegram notification via `notify_sell()` with exit reason
+- Old trades without `market_date` safely skipped
+
+**v7.1 Patch (same day):**
+- Changed position monitor from position-age proxy (`MIN_HOURS_OLD = 10h`) to actual resolution timing
+- `market_date: Option<String>` added to `WeatherTrade`, populated at both constructor sites
+- Resolution time = `market_date` at 23:59 UTC. Exits only when `hours_to_resolution < 14.0`
+
+**New fields on WeatherTrade:**
+- `neg_risk: bool` — whether market uses neg-risk exchange contract
+- `auto_exited: bool` — whether position was auto-exited by monitor
+- `market_date: Option<String>` — market resolution date (YYYY-MM-DD)
+
+### Mar 5 — v6: CV-Adjusted Kelly Sizing + Calibration Logging (PR #7)
+
+- CV-Kelly formula: `f_emp = base_kelly * (1 - CV).max(0.10)` — reduces position when ensemble members disagree
+- `CalibrationEntry` logged per bucket evaluation to `calibration_log.jsonl`
+- Fields: city, date, bucket, model probability, market price, edge, ensemble stats, outcome prediction
 
 ### Mar 1 — Market Discovery Reliability + Diagnostic Logging (PR #4)
 
@@ -260,11 +305,15 @@ pub struct WeatherTrade {
     token_id: Option<String>,    // for CLOB fill checking
     condition_id: Option<String>,// CTF condition ID for on-chain redemption (added Mar 1)
     redeemed: bool,              // USDC claimed on-chain via redeem script (added Mar 1)
+    neg_risk: bool,              // market uses neg-risk exchange contract (added Mar 5)
+    auto_exited: bool,           // position auto-exited by monitor (added Mar 5)
+    market_date: Option<String>, // market resolution date YYYY-MM-DD (added Mar 5)
 }
 ```
 
 ### run_once() flow
-1. `check_and_mark_resolved()` â€" queries Gamma API by slug for closed markets, frees exposure
+1. `position_monitor::check_and_exit_deteriorated_positions()` — auto-exit positions with price < 50% cost basis within 14h of resolution
+2. `check_and_mark_resolved()` â€" queries Gamma API by slug for closed markets, frees exposure
 2. Discover 30+ weather markets via slug patterns (3 dates Ã- 13 cities)
 3. Fetch forecasts (NOAA + Open-Meteo + Ensemble) for 13 cities Ã- 3 days
 4. For each market:
