@@ -307,9 +307,46 @@ impl PolymarketClient {
         serde_json::from_str(&body).with_context(|| format!("Failed to parse JSON: {}", &body[..body.len().min(200)]))
     }
 
-    /// Post a signed order
+    /// Post a signed order (with retry on 425/429/5xx, NOT on 400)
     pub async fn post_order(&self, order_body: &serde_json::Value) -> Result<serde_json::Value> {
-        self.auth_post("/order", order_body).await
+        let max_attempts = 3;
+        let mut last_err = None;
+
+        for attempt in 1..=max_attempts {
+            match self.auth_post("/order", order_body).await {
+                Ok(resp) => {
+                    if attempt > 1 {
+                        tracing::info!("CLOB retry succeeded (attempt {}/{})", attempt, max_attempts);
+                    }
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    // Only retry on 425 (Too Early), 429 (Rate Limited), or 5xx
+                    // Do NOT retry 400 (malformed order) — retrying won't fix it
+                    let is_retryable = err_str.contains("425") 
+                        || err_str.contains("429")
+                        || err_str.contains("500")
+                        || err_str.contains("502")
+                        || err_str.contains("503")
+                        || err_str.contains("504");
+
+                    if is_retryable && attempt < max_attempts {
+                        let delay_secs = attempt as u64; // 1s, 2s backoff
+                        tracing::warn!(
+                            "CLOB order failed (attempt {}/{}), retrying in {}s: {}",
+                            attempt, max_attempts, delay_secs, err_str
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                        last_err = Some(e);
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("post_order: exhausted retries")))
     }
 
     /// Get fee rate for a maker address
