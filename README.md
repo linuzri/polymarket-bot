@@ -2,7 +2,7 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Mar 1, 2026)
+## 🔴 Live Trading Status (Mar 7, 2026)
 
 - **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: **-$5.58**
 - **Initial Deposit:** $100.27
@@ -13,17 +13,31 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Forecast Models:** 119 ensemble members (ECMWF 51 + GFS 31 + ICON 40) + NOAA for US cities
 - **Scan Timing:** 8 windows/day aligned to GFS/ECMWF model releases (15min post-publish) + 120min fallback
 - **Laddering:** ❌ DISABLED (34 orders, 0 fills)
-- **Max Exposure:** $80 | **Max/bucket:** $15
+- **Max Exposure:** $80 | **Max/bucket:** $4 hard cap
 - **Best Trade:** Seoul Feb 21 — +$31.87 (266% return)
-- **Config:** 12% min edge (45% for narrow), 45% min probability, 25% Kelly, $15/bucket, $80 max exposure, 2¢ min market price
+- **Config:** 12% min edge (45% for narrow), 45% min probability, 25% Kelly, $4/bucket cap, $80 max exposure, 2¢ min market price
 - **Bucket-type sizing:** Wide directional 1.5x, exact/narrow 0.2x — based on data showing wide bets +$32 vs exact -$28
 - **Order pricing:** Taker (>25% edge), near-ask (>15% edge), maker (fallback) — replaces static 85% fair value
 - **Auto-Redeem:** Resolved positions auto-claimed via `poly-web3` Builder relayer — gas-free, no manual UI interaction
+- **v8 Bug Fixes (Mar 7):** 8 correctness fixes from full weather module code review — see below
 - **v7 Position Controls (Mar 5):** Per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
-- **v7.1:** Position monitor uses actual market resolution date for exit timing
+- **v7.1:** Position monitor uses actual market resolution date + local city timezone for exit timing
 - **CV-Kelly (v6):** Position sizing adjusted by ensemble coefficient of variation
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
+
+### Mar 7 — v8: 8 Bug Fixes from Full Code Review (PR #12)
+
+Eight correctness issues identified and fixed across the weather module:
+
+1. **5-share guard removed** — v5 introduced a $1.00 dollar floor, but the old 5-share CLOB minimum was still running simultaneously, blocking valid low-price trades (e.g. Toronto $1.34 at $0.30/share = 4.46 shares). Replaced with 1-share sanity guard only.
+2. **Ensemble bias correction** — `fetch_ensemble` was not applying `open_meteo_bias_f`/`open_meteo_bias_c`, while `parse_multi_model` was. Systematic scale offset fixed.
+3. **Position monitor timezone fix** — Resolution window was hardcoded to 23:59 UTC. For Seoul (UTC+9), the actual local day ends at 14:59 UTC — window was opening 9h late. Now uses `chrono-tz` to compute end-of-local-day per city.
+4. **Buffer check uses adjusted forecast** — Same-day observation adjustments updated `adjusted_forecast.high_temp` but the buffer check was still reading the raw `forecast.high_temp`.
+5. **Disagreement counter renamed** — `markets_skipped_disagreement` renamed to `markets_high_disagreement`. Markets have not been skipped since v6 introduced CV-Kelly; the stat was actively misleading in scan summaries and weekly reports.
+6. **City/forecast alignment** — `WEATHER_CITIES` included buenos-aires, ankara, and wellington but `default_cities_intl()` only had 4 cities, causing guaranteed `NO FORECAST` spam every cycle. Fixed with hybrid: added buenos-aires + ankara to config, removed wellington from discovery entirely (intentionally retired).
+7. **Dead code removed** — `extreme_edge_size_factor()` was replaced by CV-Kelly in v6 and never called. Deleted.
+8. **Discovery failure alert** — Zero markets found now fires a Telegram warning immediately instead of silently returning. Covers slug format changes or API timeouts.
 
 ### Mar 5 — v7: Position Controls + v7.1 Resolution Timing
 
@@ -131,7 +145,7 @@ polymarket-bot/
 | Toronto | CYYZ | 43.65, -79.38 |
 | Buenos Aires | SAEZ | -34.60, -58.38 |
 | Ankara | LTAC | 39.93, 32.86 |
-| Wellington | NZWN | -41.29, 174.78 |
+~~Wellington~~ | ~~NZWN~~ | Removed — worst city (-$14.02, 0 wins)
 
 ## Configuration
 
@@ -193,8 +207,9 @@ Fetches individual member trajectories from Open-Meteo Ensemble API:
 - **Auto-redemption** — resolved positions auto-claimed via Builder relayer (gas-free, 30-min cycle)
 - **Per-bucket hard cap** — $4 max per bucket regardless of Kelly output
 - **SH seasonal correction** — reduces probability for cool bets in Southern Hemisphere during summer
-- **Auto-exit monitor** — sells positions at >50% loss within 14h of resolution
+- **Auto-exit monitor** — sells positions at >50% loss within 14h of resolution (uses local city timezone)
 - **Discovery retry** — 3-attempt retry with backoff on API calls, 200ms inter-city delay, missing city warnings
+- **Discovery failure alert** — Telegram notification if zero markets found (slug format change or API timeout)
 
 ## Quick Start
 
