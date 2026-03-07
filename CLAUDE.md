@@ -3,7 +3,7 @@
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** â€" uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Mar 5, 2026)
+## Current Status (Mar 7, 2026)
 - **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: -$5.58
 - **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss; Seoul +$30.48 was biggest win)
 - **PM2:** `polymarket-bot` ONLINE — Phase A deployed, schedule-aware scanning
@@ -13,12 +13,56 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Max Exposure:** $80 (raised from $60 after batch sell recovered funds)
 - **Laddering:** DISABLED (34 orders placed, 0 fills)
 - **Wellington:** REMOVED — worst city (-$14.02 on $17.32, 0 wins)
+- **v8:** DEPLOYED Mar 7 — 8 bug fixes from full weather module code review (PR #12)
 - **v7:** DEPLOYED Mar 5 — per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
 - **v7.1:** DEPLOYED Mar 5 — position monitor uses actual hours-to-resolution instead of position age
 - **Phase A:** DEPLOYED Feb 28 — config tuning, bucket-type sizing, order book pricing
 - **Phase B (backlog):** BUY_NO support + cross-bucket mispricing — after 3 days of Phase A data (Mar 3)
 - **Auto-Redeem:** LIVE Mar 1 — Phase 2 Builder relayer (gas-free), replaces manual UI claiming
 - **Station Codes Verified:** Chicago=KORD (O'Hare) ✅, Dallas=KDAL (Love Field) ✅ — confirmed against Polymarket resolution sources
+
+### Mar 7 — v8: Bug Fixes from Full Code Review (PR #12)
+
+**8 correctness fixes, no new features:**
+
+**Task 1: 5-share guard replaced with 1-share sanity guard**
+- Both the $1.00 dollar floor (v5) AND the old `shares < 5.0` guard were running simultaneously
+- Toronto case: $1.34 cost at $0.30/share = 4.46 shares → passed dollar floor, blocked by share guard
+- Fixed in both main trade pass and laddering pass in `run_once()`
+
+**Task 2: Ensemble bias correction**
+- `parse_multi_model` applied `bias_f`/`bias_c`; `fetch_ensemble` did not
+- With current config (bias=0.0) no live impact, but a systematic offset risk for future config changes
+- Fixed in `open_meteo.rs` `fetch_ensemble()`
+
+**Task 3: Position monitor uses local city timezone**
+- Resolution window was hardcoded to `23:59 UTC`; weather markets resolve at end-of-local-day
+- Seoul (UTC+9) local midnight = 14:59 UTC — exit window was opening 9h late
+- Added `local_end_of_day_utc(date, city_name)` helper using `chrono-tz` crate
+- Added `chrono-tz = "0.9"` to `Cargo.toml`
+
+**Task 4: Buffer check uses `adjusted_forecast.high_temp`**
+- Same-day observation adjustments modified `adjusted_forecast` but buffer check still read raw `forecast.high_temp`
+- One-line fix in `run_once()`
+
+**Task 5: Rename `markets_skipped_disagreement` → `markets_high_disagreement`**
+- Markets have not been skipped on disagreement since v6 introduced CV-Kelly
+- Counter still incremented but label said "skipped" — actively misleading in scan summary and weekly Telegram
+- Renamed field, updated scan log format string, updated weekly summary label
+
+**Task 6: Align `WEATHER_CITIES` with default config (hybrid)**
+- `WEATHER_CITIES` in `markets.rs` had buenos-aires, ankara, wellington but `default_cities_intl()` only had 4 cities
+- Every scan discovered markets for 3 cities with no forecasts → guaranteed `NO FORECAST` warnings
+- Hybrid: added buenos-aires + ankara to `default_cities_intl()`; removed wellington from `WEATHER_CITIES` entirely
+
+**Task 7: Delete dead `extreme_edge_size_factor()` function**
+- Replaced by CV-Kelly in v6, never called — confirmed via grep
+
+**Task 8: Telegram alert on zero markets discovered**
+- Empty market scan returned silently with only a local `info!` log
+- Now fires `warn!` + `notifier.send()` for immediate operator notification
+
+**Task 9 (deferred):** Move `compute_edge_cv` before `CalibrationEntry` so eval rows get real `edge_cv` instead of `-1.0`. No trading impact — deferred to standalone pass.
 
 ### Mar 5 — v7: Position Controls (PR #10) + v7.1 Patch
 
@@ -41,7 +85,7 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - New file: `src/weather/position_monitor.rs`
 - Runs once per scan cycle before market evaluation
 - Sells if: current price < 50% of cost basis AND resolution within 14 hours AND recoverable value >= $0.50
-- Uses `market_date` field (v7.1) to compute actual hours-to-resolution (end-of-day UTC)
+- Uses `market_date` field (v7.1) to compute actual hours-to-resolution (end-of-local-day per city timezone, v8)
 - Places SELL via `orders::place_order()` with `Side::Sell` at current market price
 - Marks trade as `auto_exited: true`, `outcome: "AUTO_EXIT"` in strategy_trades.json
 - Telegram notification via `notify_sell()` with exit reason
@@ -50,7 +94,7 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 **v7.1 Patch (same day):**
 - Changed position monitor from position-age proxy (`MIN_HOURS_OLD = 10h`) to actual resolution timing
 - `market_date: Option<String>` added to `WeatherTrade`, populated at both constructor sites
-- Resolution time = `market_date` at 23:59 UTC. Exits only when `hours_to_resolution < 14.0`
+- Resolution time = `market_date` at 23:59 local city time (converted to UTC via chrono-tz, v8 Task 3). Exits only when `hours_to_resolution < 14.0`
 
 **New fields on WeatherTrade:**
 - `neg_risk: bool` — whether market uses neg-risk exchange contract
