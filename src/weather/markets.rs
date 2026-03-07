@@ -75,7 +75,6 @@ const WEATHER_CITIES: &[(&str, bool)] = &[
     ("toronto", false),
     ("buenos-aires", false),
     ("ankara", false),
-    ("wellington", false),
 ];
 
 /// Generate the Polymarket event slug for a city and date

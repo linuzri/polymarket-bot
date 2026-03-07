@@ -132,7 +132,7 @@ struct ScanSummary {
     timestamp: String,
     markets_discovered: usize,
     markets_evaluated: usize,
-    markets_skipped_disagreement: usize,
+    markets_high_disagreement: usize,
     markets_skipped_no_forecast: usize,
     buckets_evaluated: usize,
     buckets_skipped_low_price: usize,
@@ -156,17 +156,6 @@ fn clamp_probability(p: f64) -> f64 {
     p.max(0.02).min(0.95)
 }
 
-/// Task 5: Position size reduction factor for suspiciously large edges.
-/// Linear scale from 1.0 at 30% edge down to 0.50 at 50%+ edge.
-fn extreme_edge_size_factor(edge: f64) -> f64 {
-    if edge <= 0.30 {
-        1.0
-    } else if edge >= 0.50 {
-        0.50
-    } else {
-        1.0 - (edge - 0.30) / 0.20 * 0.50
-    }
-}
 
 /// CV-adjusted Kelly: compute coefficient of variation of edge across ensemble bootstrap groups.
 /// CV = std_dev_edge / mean_edge. Returns value in [0, 1] clamped for safety.
@@ -836,13 +825,13 @@ impl WeatherStrategy {
             .collect();
 
         if !recent_scans.is_empty() {
-            let total_disagreement: usize = recent_scans.iter().map(|s| s.markets_skipped_disagreement).sum();
+            let total_disagreement: usize = recent_scans.iter().map(|s| s.markets_high_disagreement).sum();
             let total_narrow: usize = recent_scans.iter().map(|s| s.buckets_skipped_narrow).sum();
             let total_extreme: usize = recent_scans.iter().map(|s| s.buckets_skipped_extreme_edge).sum();
             let total_low_prob: usize = recent_scans.iter().map(|s| s.buckets_skipped_low_prob).sum();
 
             msg.push_str(&format!(
-                "\n\nGuardrails ({} scans):\n  Model disagreement: {} skipped\n  Narrow bucket: {} skipped\n  Extreme edge: {} flagged\n  Low probability: {} skipped",
+                "\n\nGuardrails ({} scans):\n  High model disagreement: {} flagged (not skipped)\n  Narrow bucket: {} skipped\n  Extreme edge: {} flagged\n  Low probability: {} skipped",
                 recent_scans.len(), total_disagreement, total_narrow, total_extreme, total_low_prob
             ));
         }
@@ -909,7 +898,7 @@ impl WeatherStrategy {
             timestamp: Utc::now().to_rfc3339(),
             markets_discovered: 0,
             markets_evaluated: 0,
-            markets_skipped_disagreement: 0,
+            markets_high_disagreement: 0,
             markets_skipped_no_forecast: 0,
             buckets_evaluated: 0,
             buckets_skipped_low_price: 0,
@@ -930,7 +919,10 @@ impl WeatherStrategy {
         let weather_markets = markets::discover_weather_markets(&self.http).await?;
         scan.markets_discovered = weather_markets.len();
         if weather_markets.is_empty() {
-            info!("No weather markets found on Polymarket");
+            let alert = "DISCOVERY FAILURE: Zero weather markets found this scan cycle. \
+                         Polymarket slug format may have changed or API timed out. Manual check required.";
+            warn!("{}", alert);
+            self.notifier.send(alert).await;
             self.write_scan_summary(&scan);
             return Ok(0);
         }
@@ -1055,7 +1047,7 @@ impl WeatherStrategy {
                     (om_mean_val - noaa_val).abs(),
                     if market.unit == TempUnit::Fahrenheit { "F" } else { "C" }
                 );
-                scan.markets_skipped_disagreement += 1;
+                scan.markets_high_disagreement += 1;
                 // No continue â€” CV-adjusted Kelly handles disagreement via smaller position size
             }
 
@@ -1159,7 +1151,7 @@ impl WeatherStrategy {
                     super::TempUnit::Fahrenheit => self.config.forecast_buffer_f,
                     super::TempUnit::Celsius => self.config.forecast_buffer_c,
                 };
-                let forecast_temp = forecast.high_temp;
+                let forecast_temp = adjusted_forecast.high_temp;
                 let near_threshold = if bucket.temp_bucket.max_temp.is_finite() {
                     // "X or lower" bucket â€” forecast must be well below max
                     (forecast_temp - bucket.temp_bucket.max_temp).abs() < buffer
@@ -1454,8 +1446,8 @@ impl WeatherStrategy {
 
                     // Dollar floor
                     if cost < 1.00 { warn!("TRADE BLOCKED: cost ${:.2} below $1.00 minimum", cost); continue; }
-                    // CLOB 5-share minimum
-                    if shares < 5.0 { warn!("TRADE BLOCKED: {:.2} shares below Polymarket minimum of 5 (cost=${:.2})", shares, cost); continue; }
+                    // Sanity guard: at least 1 share
+                    if shares < 1.0 { warn!("TRADE BLOCKED: {:.2} shares below 1-share minimum (cost=${:.2})", shares, cost); continue; }
 
                     scan.trades_attempted += 1;
                     println!("  >> WEATHER TRADE: {} | {}", market.question, bucket.label);
@@ -1623,8 +1615,8 @@ impl WeatherStrategy {
                     let order_price = *market_price;
                     let shares = (amount / order_price * 100.0).floor() / 100.0;
 
-                    if shares < 5.0 {
-                        debug!("LADDER SKIP: shares {:.2} below minimum", shares);
+                    if shares < 1.0 {
+                        debug!("LADDER SKIP: shares {:.2} below 1-share minimum", shares);
                         continue;
                     }
 
@@ -1898,9 +1890,9 @@ impl WeatherStrategy {
     /// Write scan summary to JSONL log file
     fn write_scan_summary(&self, scan: &ScanSummary) {
         info!(
-            "SCAN SUMMARY: {} markets, {} evaluated, {} disagreement, {} no-forecast | {} buckets, {} trades placed, ${:.2} deployed | exposure: ${:.2}",
+            "SCAN SUMMARY: {} markets, {} evaluated, {} high_disagreement, {} no-forecast | {} buckets, {} trades placed, ${:.2} deployed | exposure: ${:.2}",
             scan.markets_discovered, scan.markets_evaluated,
-            scan.markets_skipped_disagreement, scan.markets_skipped_no_forecast,
+            scan.markets_high_disagreement, scan.markets_skipped_no_forecast,
             scan.buckets_evaluated, scan.trades_placed,
             scan.total_usd_deployed, self.total_exposure
         );

@@ -1,13 +1,49 @@
 //! v7 Task 3: Automated position exit on price deterioration.
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{Datelike, TimeZone, Utc};
 use tracing::{info, warn};
 
 use crate::api::client::PolymarketClient;
 use crate::notifications::TelegramNotifier;
 use crate::orders::{self, Side};
 use super::strategy::WeatherTrade;
+
+/// Compute end-of-local-day (23:59 local time) for a given city, returned as UTC DateTime.
+/// Falls back to UTC end-of-day if city timezone is unknown.
+fn local_end_of_day_utc(date: chrono::NaiveDate, city_name: &str) -> chrono::DateTime<Utc> {
+    let tz_str = match city_name {
+        "nyc"           => "America/New_York",
+        "chicago"       => "America/Chicago",
+        "miami"         => "America/New_York",
+        "atlanta"       => "America/New_York",
+        "seattle"       => "America/Los_Angeles",
+        "dallas"        => "America/Chicago",
+        "london"        => "Europe/London",
+        "seoul"         => "Asia/Seoul",
+        "paris"         => "Europe/Paris",
+        "toronto"       => "America/Toronto",
+        "buenos-aires"  => "America/Argentina/Buenos_Aires",
+        "ankara"        => "Europe/Istanbul",
+        "wellington"    => "Pacific/Auckland",
+        "tokyo"         => "Asia/Tokyo",
+        "sydney"        => "Australia/Sydney",
+        "singapore"     => "Asia/Singapore",
+        "dubai"         => "Asia/Dubai",
+        "berlin"        => "Europe/Berlin",
+        _               => "UTC",
+    };
+
+    let tz: chrono_tz::Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
+    let local_end = tz
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 23, 59, 0)
+        .single();
+
+    match local_end {
+        Some(dt) => dt.with_timezone(&Utc),
+        None => date.and_hms_opt(23, 59, 0).unwrap().and_utc(),
+    }
+}
 
 const EXIT_PRICE_RATIO_THRESHOLD: f64 = 0.50;
 /// Only exit within this many hours of resolution
@@ -48,11 +84,8 @@ pub async fn check_and_exit_deteriorated_positions(
             },
             None => continue, // No market_date = old trade, skip
         };
-        // Weather markets resolve end-of-day UTC (roughly 23:59 UTC on market_date)
-        let resolution_time = resolution_date
-            .and_hms_opt(23, 59, 0)
-            .unwrap()
-            .and_utc();
+        // Weather markets resolve end-of-local-day for each city's timezone
+        let resolution_time = local_end_of_day_utc(resolution_date, &trade.city);
         let hours_to_resolution = (resolution_time - now).num_minutes() as f64 / 60.0;
         // Skip if already resolved or too far from resolution
         if hours_to_resolution < 0.0 || hours_to_resolution > EXIT_HOURS_TO_RESOLUTION {

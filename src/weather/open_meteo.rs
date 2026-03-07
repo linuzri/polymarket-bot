@@ -210,9 +210,13 @@ impl OpenMeteoClient {
                 for key in &member_keys {
                     if let Some(arr) = daily.get(key).and_then(|v| v.as_array()) {
                         if let Some(temp) = arr.get(i).and_then(|v| v.as_f64()) {
+                            let bias = match city.unit {
+                                TempUnit::Fahrenheit => self.bias_f,
+                                TempUnit::Celsius => self.bias_c,
+                            };
                             let converted = match city.unit {
-                                TempUnit::Fahrenheit => super::c_to_f(temp),
-                                TempUnit::Celsius => temp,
+                                TempUnit::Fahrenheit => super::c_to_f(temp) + bias,
+                                TempUnit::Celsius => temp + bias,
                             };
                             members.push(converted);
                         }
