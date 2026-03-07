@@ -193,7 +193,7 @@ fn default_cities_us() -> Vec<String> {
 fn default_forecast_buffer() -> f64 { 3.0 }
 fn default_forecast_buffer_c() -> f64 { 2.0 }
 fn default_cities_intl() -> Vec<String> {
-    vec!["london", "seoul", "paris", "toronto"]
+    vec!["london", "seoul", "paris", "toronto", "buenos-aires", "ankara"]
         .into_iter().map(String::from).collect()
 }
 
