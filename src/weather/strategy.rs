@@ -888,6 +888,9 @@ impl WeatherStrategy {
         // Check fill status for pending orders
         self.check_fill_status().await;
 
+        // Reconcile with Polymarket activity API (ground truth for fills/P&L)
+        self.reconcile_with_api().await;
+
         // Check forecast outcomes for resolved trades
         super::outcomes::check_outcomes(&self.http, &self.config).await;
 
@@ -1918,10 +1921,10 @@ impl WeatherStrategy {
         let maker_addr = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
 
         for trade in all_trades.iter_mut() {
-            if trade.dry_run || trade.resolved {
+            if trade.dry_run {
                 continue;
             }
-            // Skip if already checked
+            // Skip if already fill-checked (regardless of resolved status)
             if trade.fill_status.is_some() {
                 continue;
             }
@@ -1994,6 +1997,201 @@ impl WeatherStrategy {
             if let Ok(json) = serde_json::to_string_pretty(&all_trades) {
                 let _ = std::fs::write("strategy_trades.json", json);
             }
+        }
+    }
+
+    /// Reconcile local trade log with Polymarket activity API for ground-truth fill data.
+    /// The CLOB API is ephemeral — orders vanish after settlement — so we use the
+    /// data-api activity endpoint which persists indefinitely.
+    async fn reconcile_with_api(&mut self) {
+        let proxy_wallet = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
+
+        // Fetch up to 500 activities (5 pages of 100)
+        let mut all_activities: Vec<serde_json::Value> = Vec::new();
+        let mut offset: u64 = 0;
+        let page_limit: u64 = 100;
+        let max_pages: u64 = 5;
+
+        for _ in 0..max_pages {
+            let url = format!(
+                "https://data-api.polymarket.com/activity?user={}&limit={}&offset={}",
+                proxy_wallet, page_limit, offset
+            );
+            match self.http.get(&url).send().await {
+                Ok(resp) => {
+                    match resp.json::<Vec<serde_json::Value>>().await {
+                        Ok(page) => {
+                            let count = page.len() as u64;
+                            all_activities.extend(page);
+                            if count < page_limit {
+                                break; // last page
+                            }
+                            offset += page_limit;
+                        }
+                        Err(e) => {
+                            warn!("API reconcile: failed to parse activity page: {}", e);
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("API reconcile: failed to fetch activity: {}", e);
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        if all_activities.is_empty() {
+            debug!("API reconcile: no activities found");
+            return;
+        }
+
+        // Filter for temperature-related TRADE/REDEEM activities
+        let temp_activities: Vec<&serde_json::Value> = all_activities.iter()
+            .filter(|a| {
+                let atype = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let slug = a.get("eventSlug").and_then(|v| v.as_str()).unwrap_or("");
+                (atype == "TRADE" || atype == "REDEEM") && slug.contains("temperature")
+            })
+            .collect();
+
+        if temp_activities.is_empty() {
+            debug!("API reconcile: no temperature activities found");
+            return;
+        }
+
+        info!("API reconcile: {} temperature activities from data-api", temp_activities.len());
+
+        // Group by eventSlug → calculate per-event P&L
+        let mut event_pnl: HashMap<String, f64> = HashMap::new();
+        let mut event_buys: HashMap<String, Vec<&serde_json::Value>> = HashMap::new();
+
+        for act in &temp_activities {
+            let slug = act.get("eventSlug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let atype = act.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let side = act.get("side").and_then(|v| v.as_str()).unwrap_or("");
+            let usdc = act.get("usdcSize")
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+                .unwrap_or(0.0);
+
+            let pnl_entry = event_pnl.entry(slug.clone()).or_insert(0.0);
+            match atype {
+                "TRADE" if side == "BUY" => {
+                    *pnl_entry -= usdc; // cost
+                    event_buys.entry(slug).or_default().push(act);
+                }
+                "TRADE" if side == "SELL" => {
+                    *pnl_entry += usdc; // revenue
+                }
+                "REDEEM" => {
+                    *pnl_entry += usdc; // redemption payout
+                }
+                _ => {}
+            }
+        }
+
+        // Load local trades
+        let mut all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let mut changed = false;
+        let now_str = Utc::now().to_rfc3339();
+
+        for trade in all_trades.iter_mut() {
+            if trade.dry_run {
+                continue;
+            }
+            // Only reconcile trades that haven't been fill-checked yet
+            if trade.fill_status.is_some() {
+                continue;
+            }
+
+            let condition_id = trade.condition_id.as_deref().unwrap_or("");
+            let token_id = trade.token_id.as_deref().unwrap_or("");
+            if condition_id.is_empty() && token_id.is_empty() {
+                continue;
+            }
+
+            // Try to match by checking API buy activities for matching asset/conditionId
+            for (slug, buys) in &event_buys {
+                let mut matched = false;
+                for buy in buys {
+                    let api_asset = buy.get("asset").and_then(|v| v.as_str()).unwrap_or("");
+                    let api_condition = buy.get("conditionId").and_then(|v| v.as_str()).unwrap_or("");
+                    let api_usdc = buy.get("usdcSize")
+                        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+                        .unwrap_or(0.0);
+
+                    // Match by token_id (asset) or condition_id
+                    let id_match = (!token_id.is_empty() && api_asset == token_id)
+                        || (!condition_id.is_empty() && api_condition == condition_id);
+
+                    // Also check approximate cost match (within 50%)
+                    let cost_ratio = if trade.cost > 0.0 && api_usdc > 0.0 {
+                        (api_usdc / trade.cost).min(trade.cost / api_usdc)
+                    } else {
+                        0.0
+                    };
+                    let cost_match = cost_ratio > 0.5;
+
+                    if id_match && cost_match {
+                        matched = true;
+                        trade.fill_status = Some("filled".to_string());
+                        trade.fill_confirmed = true;
+                        trade.fill_checked_at = Some(now_str.clone());
+
+                        // Calculate proportional P&L from event totals
+                        if let Some(&total_event_pnl) = event_pnl.get(slug) {
+                            // Sum all buy costs for this event to get our share
+                            let total_event_cost: f64 = buys.iter()
+                                .filter_map(|b| b.get("usdcSize")
+                                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))))
+                                .sum();
+
+                            if total_event_cost > 0.0 {
+                                let share = trade.cost / total_event_cost;
+                                let trade_pnl = total_event_pnl * share;
+                                trade.pnl = Some((trade_pnl * 100.0).round() / 100.0);
+                                trade.outcome = Some(if trade_pnl >= 0.0 { "WIN".to_string() } else { "LOSS".to_string() });
+                            }
+                        }
+
+                        info!("API RECONCILE: {} | {} | FILLED | pnl=${:.2}",
+                            trade.city, trade.bucket_label,
+                            trade.pnl.unwrap_or(0.0));
+                        changed = true;
+                        break;
+                    }
+                }
+                if matched {
+                    break;
+                }
+            }
+
+            // If no API match found and trade is old (>48h), mark as unfilled
+            if trade.fill_status.is_none() {
+                if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&trade.timestamp) {
+                    let age = Utc::now() - ts.with_timezone(&Utc);
+                    if age.num_hours() > 48 {
+                        trade.fill_status = Some("unfilled".to_string());
+                        trade.fill_checked_at = Some(now_str.clone());
+                        trade.outcome = Some("NO_FILL".to_string());
+                        info!("API RECONCILE: {} | {} | NO_FILL (>48h, not in API)",
+                            trade.city, trade.bucket_label);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if changed {
+            if let Ok(json) = serde_json::to_string_pretty(&all_trades) {
+                let _ = std::fs::write("strategy_trades.json", json);
+            }
+            info!("API reconcile complete: trade log updated");
         }
     }
 
