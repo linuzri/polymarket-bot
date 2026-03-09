@@ -243,7 +243,34 @@ fn cross_validate_with_noaa(
         true
     };
 
-    // Ensemble very high but NOAA disagrees: apply distance-based penalty
+    // HARD BLOCK: If NOAA is on the WRONG SIDE of the bucket threshold, kill the trade.
+    // "82F or higher" with NOAA at 78F = NOAA is below threshold = hard block.
+    // "42F or lower" with NOAA at 46F = NOAA is above threshold = hard block.
+    // This catches the ensemble running hot/cold vs NOAA ground truth (Atlanta Mar 9 incident).
+    if !noaa_near_bucket {
+        // "X or higher" bucket: NOAA below min_temp
+        if bucket.min_temp.is_finite() && !bucket.max_temp.is_finite() && noaa < bucket.min_temp {
+            warn!("NOAA HARD BLOCK: {} | NOAA {:.1} < bucket min {:.1} | ensemble was {:.3}",
+                bucket.label, noaa, bucket.min_temp, ensemble_prob);
+            return 0.0; // Completely block the trade
+        }
+        // "X or lower" bucket: NOAA above max_temp
+        if bucket.max_temp.is_finite() && !bucket.min_temp.is_finite() && noaa > bucket.max_temp {
+            warn!("NOAA HARD BLOCK: {} | NOAA {:.1} > bucket max {:.1} | ensemble was {:.3}",
+                bucket.label, noaa, bucket.max_temp, ensemble_prob);
+            return 0.0;
+        }
+        // Exact/range bucket: NOAA outside range by more than tolerance
+        if bucket.min_temp.is_finite() && bucket.max_temp.is_finite() {
+            if noaa < bucket.min_temp - tolerance || noaa > bucket.max_temp + tolerance {
+                warn!("NOAA HARD BLOCK: {} | NOAA {:.1} outside [{:.1}, {:.1}] +/- {:.1} | ensemble was {:.3}",
+                    bucket.label, noaa, bucket.min_temp, bucket.max_temp, tolerance, ensemble_prob);
+                return 0.0;
+            }
+        }
+    }
+
+    // Ensemble very high but NOAA near but not fully supporting: apply distance-based penalty
     if ensemble_prob > 0.80 && !noaa_near_bucket {
         let distance = if bucket.min_temp.is_finite() && bucket.max_temp.is_finite() {
             let center = (bucket.min_temp + bucket.max_temp) / 2.0;
@@ -255,9 +282,9 @@ fn cross_validate_with_noaa(
         } else {
             0.0
         };
-        // 5% penalty per unit of distance, capped at 25%
-        let penalty = (distance / tolerance * 0.05).min(0.25);
-        return (ensemble_prob - penalty).max(0.60);
+        // 15% penalty per unit of distance, capped at 50% (was 5%/25% - too weak)
+        let penalty = (distance / tolerance * 0.15).min(0.50);
+        return (ensemble_prob - penalty).max(0.30);
     }
 
     // Ensemble very low but NOAA supports the bucket: slight boost
