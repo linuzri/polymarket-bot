@@ -1,11 +1,12 @@
-﻿# CLAUDE.md - Polymarket Weather Bot
+# CLAUDE.md - Polymarket Weather Bot
 
 ## Project Overview
 Automated Polymarket prediction market trading bot built in Rust. **100% weather arbitrage** â€" uses NOAA + Open-Meteo forecasts + ensemble probabilities to find mispriced temperature markets and places limit orders at fair value.
 
-## Current Status (Mar 7, 2026)
-- **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: -$5.58
-- **Weather P&L:** -$2.43 (4 cities profitable, 8 at loss; Seoul +$30.48 was biggest win)
+## Current Status (Mar 9, 2026)
+- **Portfolio:** ~$94 | Cash: ~$72 | All-time P/L: **+$0.18** (breakeven)
+- **Weather P&L:** **+$8.59** (9 markets won, 34 lost
+- **Non-weather P&L:** -$8.41 (manual trades, US/Iran biggest drag)
 - **PM2:** `polymarket-bot` ONLINE — Phase A deployed, schedule-aware scanning
 - **PM2:** `polymarket-redeem` ONLINE — auto-redeem every 30 min via Builder relayer (gas-free)
 - **Telegram:** Trade alerts + weekly P&L summary (Sundays midnight UTC)
@@ -13,6 +14,7 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Max Exposure:** $80 (raised from $60 after batch sell recovered funds)
 - **Laddering:** DISABLED (34 orders placed, 0 fills)
 - **Wellington:** REMOVED — worst city (-$14.02 on $17.32, 0 wins)
+- **v9:** DEPLOYED Mar 9 — fill tracking reconciliation with Polymarket activity API (PR #15)
 - **v8:** DEPLOYED Mar 7 — 8 bug fixes from full weather module code review (PR #12)
 - **v7:** DEPLOYED Mar 5 — per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
 - **v7.1:** DEPLOYED Mar 5 — position monitor uses actual hours-to-resolution instead of position age
@@ -21,6 +23,38 @@ Automated Polymarket prediction market trading bot built in Rust. **100% weather
 - **Auto-Redeem:** LIVE Mar 1 — Phase 2 Builder relayer (gas-free), replaces manual UI claiming
 - **Station Codes Verified:** Chicago=KORD (O'Hare) ✅, Dallas=KDAL (Love Field) ✅ — confirmed against Polymarket resolution sources
 
+
+### Mar 9 — v9: Fill Tracking Reconciliation (PR #15)
+
+**Problem:** strategy_trades.json showed 0 fills and 0 wins across 62 trades. Actual Polymarket account data (from data-api) showed 39 fills and +$8.59 weather P&L.
+
+**Root Cause (3 bugs):**
+1. `check_fill_status()` skipped `resolved` trades, but trades were marked resolved before fills were checked
+2. CLOB API is ephemeral — orders disappear after settlement, so fill checks returned "unfilled" for settled trades
+3. No reconciliation with ground-truth account activity data
+
+**Fix 1: Remove resolved skip in check_fill_status()**
+- Changed from `if trade.dry_run || trade.resolved { continue; }` to `if trade.dry_run { continue; }`
+- Trades now get fill-checked regardless of resolved status
+
+**Fix 2: Add reconcile_with_api() function**
+- New async function queries `data-api.polymarket.com/activity?user={proxy_wallet}` (paginates up to 500 activities)
+- Filters for temperature-related TRADE/REDEEM activities
+- Groups by eventSlug to calculate per-event P&L (sell + redeem - buy)
+- Matches local trades by condition_id/token_id with cost similarity check (within 50%)
+- Updates fill_status, fill_confirmed, pnl (proportional to event P&L), and outcome (WIN/LOSS)
+- Marks stale unmatched trades (>48h) as NO_FILL
+- Runs once per scan cycle after check_fill_status()
+
+**Historical backfill:** Separate PowerShell script reconciled all 62 existing trades against 249 API activities.
+Before: 0 fills, 0 P&L, 0 outcomes. After: 39 fills, 39 P&L, 46 outcomes (12 WIN, 27 LOSS, 4 NO_FILL, 3 MANUAL_CLOSE).
+
+**Account analysis (from Polymarket API):**
+- 249 total activities (206 trades + 43 redemptions) across 55 markets
+- Weather: +$8.59 P&L (165 trades). Non-weather: -$8.41 P&L (41 trades)
+- Probability model insight: winning markets avg prob 0.462 vs losing avg prob 0.410 — model doesn't separate winners from losers
+- Worst cities by P&L: Buenos Aires (-$37), Dallas (-$23), Seoul (-$11) — candidates for removal
+- Best cities: NYC (+$8.71), Ankara (+$2.19), Chicago (+$6.43)
 ### Mar 7 — v8: Bug Fixes from Full Code Review (PR #12)
 
 **8 correctness fixes, no new features:**

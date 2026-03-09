@@ -2,10 +2,11 @@
 
 Automated weather prediction market trading bot for [Polymarket](https://polymarket.com), built in Rust. Uses **NOAA + Open-Meteo forecasts + ensemble member probabilities** to find mispriced temperature markets and places limit orders at calculated fair value.
 
-## 🔴 Live Trading Status (Mar 7, 2026)
+## 🔴 Live Trading Status (Mar 9, 2026)
 
-- **Portfolio:** $94.64 | Cash: $72.13 | All-time P/L: **-$5.58**
+- **Portfolio:** ~$94 | Cash: ~$72 | All-time P/L: **+$0.18** (breakeven)
 - **Initial Deposit:** $100.27
+- **Weather P&L:** **+$8.59** | Non-weather: -$8.41
 - **Strategy:** 100% Weather Arbitrage — **Phase A data-driven overhaul deployed**
 - **PM2:** `polymarket-bot` **ONLINE** — schedule-aware scanning aligned to weather model releases
 - **PM2:** `polymarket-redeem` **ONLINE** — auto-redeem resolved positions every 30 min (gas-free via Builder relayer)
@@ -19,6 +20,7 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Bucket-type sizing:** Wide directional 1.5x, exact/narrow 0.2x — based on data showing wide bets +$32 vs exact -$28
 - **Order pricing:** Taker (>25% edge), near-ask (>15% edge), maker (fallback) — replaces static 85% fair value
 - **Auto-Redeem:** Resolved positions auto-claimed via `poly-web3` Builder relayer — gas-free, no manual UI interaction
+- **v9 Fill Tracking (Mar 9):** `reconcile_with_api()` queries Polymarket activity API for ground-truth fill data, P&L, and outcomes every scan cycle (PR #15)
 - **v8 Bug Fixes (Mar 7):** 8 correctness fixes from full weather module code review — see below
 - **v7 Position Controls (Mar 5):** Per-bucket hard cap ($4), SH seasonal bias correction, auto-exit position monitor
 - **v7.1:** Position monitor uses actual market resolution date + local city timezone for exit timing
@@ -26,6 +28,14 @@ Automated weather prediction market trading bot for [Polymarket](https://polymar
 - **Outcome Tracking:** WIN/LOSS/NO_FILL with P&L via CLOB API + temp unit conversion fix
 - **Weekly Summary:** Telegram every Sunday midnight UTC
 
+
+### Mar 9 — v9: Fill Tracking Reconciliation (PR #15)
+
+`strategy_trades.json` showed 0 fills and 0 wins — the bot didn't know its own performance. Root cause: `check_fill_status()` skipped resolved trades, and the CLOB API is ephemeral (orders vanish after settlement).
+
+**Fix:** Added `reconcile_with_api()` that queries `data-api.polymarket.com/activity` for ground-truth trade data every scan cycle. Matches local trades by condition_id/token_id, calculates proportional P&L from event totals, and updates outcomes. Also fixed the resolved-skip bug in `check_fill_status()`.
+
+**Result:** Historical backfill updated all 62 trades. Before: 0 fills, 0 P&L. After: 39 fills, 39 P&L entries, 12 wins, 27 losses. Weather strategy is actually **+$8.59** — the bot just didn't know it.
 ### Mar 7 — v8: 8 Bug Fixes from Full Code Review (PR #12)
 
 Eight correctness issues identified and fixed across the weather module:
