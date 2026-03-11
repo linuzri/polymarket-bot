@@ -134,6 +134,18 @@ pub struct WeatherConfig {
     /// Hard cap on USDC per individual temperature bucket, regardless of Kelly output.
     #[serde(default = "default_max_per_bucket_hard_cap")]
     pub max_per_bucket_hard_cap: f64,
+    /// Kill switch: skip all narrow/exact-temperature buckets entirely.
+    /// Overrides min_edge_narrow — use when exact bets are consistently losing.
+    #[serde(default = "default_false")]
+    pub skip_narrow_bets: bool,
+    /// Max total buys per market slug across all sessions (persisted in strategy_trades.json).
+    /// Prevents over-concentrating in a single market. Default 10 = effectively no cap.
+    #[serde(default = "default_max_buys_per_market")]
+    pub max_buys_per_market: usize,
+    /// Probability shrinkage factor: shrunk_prob = (1-factor) * ensemble_prob + factor * base_rate
+    /// Default 0.3 = 30% shrinkage toward uniform prior
+    #[serde(default = "default_probability_shrinkage")]
+    pub probability_shrinkage: f64,
 }
 
 impl Default for WeatherConfig {
@@ -163,6 +175,9 @@ impl Default for WeatherConfig {
             ladder_min_model_prob: 0.05,
             ladder_max_market_price: 0.15,
             max_per_bucket_hard_cap: 4.0,
+            skip_narrow_bets: false,
+            max_buys_per_market: 10,
+            probability_shrinkage: 0.3,
         }
     }
 }
@@ -186,6 +201,8 @@ fn default_ladder_max_buckets() -> usize { 5 }
 fn default_ladder_min_prob() -> f64 { 0.05 }
 fn default_ladder_max_price() -> f64 { 0.15 }
 fn default_max_per_bucket_hard_cap() -> f64 { 4.0 }
+fn default_max_buys_per_market() -> usize { 10 }
+fn default_probability_shrinkage() -> f64 { 0.3 }
 fn default_cities_us() -> Vec<String> {
     vec!["nyc", "chicago", "miami", "atlanta", "seattle", "dallas"]
         .into_iter().map(String::from).collect()

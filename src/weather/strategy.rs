@@ -126,7 +126,7 @@ pub struct WeatherTrade {
     pub market_date: Option<String>,
 }
 
-/// Scan cycle summary for logging â€” tracks what was evaluated, skipped, and why
+/// Scan cycle summary for logging â€" tracks what was evaluated, skipped, and why
 #[derive(Serialize, Deserialize, Debug)]
 struct ScanSummary {
     timestamp: String,
@@ -151,9 +151,9 @@ struct ScanSummary {
 
 // ===== Strategy helper functions =====
 
-/// Task 4: Clamp probability to [0.02, 0.95] before edge calculation.
+/// Task 4: Clamp probability to [0.02, 0.85] before edge calculation.
 fn clamp_probability(p: f64) -> f64 {
-    p.max(0.02).min(0.95)
+    p.max(0.02).min(0.85)
 }
 
 
@@ -415,7 +415,7 @@ impl WeatherStrategy {
         trades.iter()
             .filter(|t| !t.dry_run)
             .filter(|t| !t.resolved)
-            .filter(|t| !t.redeemed) // Exclude redeemed positions â€” capital already reclaimed
+            .filter(|t| !t.redeemed) // Exclude redeemed positions â€" capital already reclaimed
             .filter(|t| {
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
                     let days_ago = (Utc::now() - ts.with_timezone(&Utc)).num_days();
@@ -439,7 +439,7 @@ impl WeatherStrategy {
         trades.iter()
             .filter(|t| !t.dry_run)
             .filter(|t| !t.resolved)
-            .filter(|t| !t.redeemed) // Exclude redeemed positions â€” market slot freed
+            .filter(|t| !t.redeemed) // Exclude redeemed positions â€" market slot freed
             .filter(|t| {
                 // Only consider trades from last 4 days (weather markets are 1-2 days out)
                 if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&t.timestamp) {
@@ -451,6 +451,22 @@ impl WeatherStrategy {
             })
             .map(|t| format!("{}|{}", t.market_question, t.bucket_label))
             .collect()
+    }
+
+    /// Count total buys per market slug across all non-dry-run trades in strategy_trades.json.
+    /// Used to enforce max_buys_per_market cap across sessions.
+    fn load_buys_per_market() -> std::collections::HashMap<String, usize> {
+        let trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for trade in trades.iter().filter(|t| !t.dry_run) {
+            if let Some(ref slug) = trade.market_slug {
+                *counts.entry(slug.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
     }
 
     /// Check strategy_trades.json for open positions and mark any that have resolved.
@@ -561,7 +577,7 @@ impl WeatherStrategy {
                             info!("LOSS -${:.2}: {} | {}", trade.cost, trade.market_question, trade.bucket_label);
                         }
                         None => {
-                            // Could not determine outcome â€” mark resolved but unknown
+                            // Could not determine outcome â€" mark resolved but unknown
                             trade.outcome = Some("UNKNOWN".to_string());
                             trade.pnl = None;
                             warn!("RESOLVED but outcome unknown: {} | {}", trade.market_question, trade.bucket_label);
@@ -713,7 +729,7 @@ impl WeatherStrategy {
             station, date.replace("-", "")
         );
         // Weather Underground API requires an API key; skip if not available
-        // For now, return None â€” can be enhanced later with WU API key
+        // For now, return None â€" can be enhanced later with WU API key
         debug!("Resolution temp lookup skipped (no WU API key): {} {}", station, date);
         None
     }
@@ -740,7 +756,7 @@ impl WeatherStrategy {
         None
     }
 
-    /// Weekly P&L summary â€” runs Sunday midnight UTC
+    /// Weekly P&L summary â€" runs Sunday midnight UTC
     async fn weekly_summary(&self) {
         let all_trades: Vec<WeatherTrade> = match std::fs::read_to_string("strategy_trades.json") {
             Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
@@ -962,7 +978,7 @@ impl WeatherStrategy {
         let cities = get_cities(&self.config);
         let forecasts = self.fetch_all_forecasts(&cities).await;
         if forecasts.is_empty() {
-            warn!("No forecasts fetched â€” skipping weather strategy");
+            warn!("No forecasts fetched - skipping weather strategy");
             return Ok(0);
         }
         info!("Fetched forecasts for {} cities", forecasts.len());
@@ -981,8 +997,10 @@ impl WeatherStrategy {
         }
 
 
-        // Pre-load open position keys ONCE (was loading per-bucket â€” 224 file reads/scan)
+        // Pre-load open position keys ONCE (was loading per-bucket â€" 224 file reads/scan)
         let file_position_keys = Self::load_open_position_keys();
+        // Load per-market buy counts for max_buys_per_market cap enforcement
+        let mut buys_per_market = Self::load_buys_per_market();
 
         for market in &weather_markets {
             if self.total_exposure >= self.config.max_total_exposure {
@@ -1048,7 +1066,7 @@ impl WeatherStrategy {
                 }
             }
 
-            // Calculate probabilities â€” prefer ensemble when available (Task 2)
+            // Calculate probabilities â€" prefer ensemble when available (Task 2)
             let buckets_vec: Vec<_> = market.buckets.iter().map(|b| b.temp_bucket.clone()).collect();
             let probs = if let Some(ref members) = adjusted_forecast.ensemble_members {
                 if members.len() >= 20 {
@@ -1061,7 +1079,7 @@ impl WeatherStrategy {
                 forecast::calculate_probabilities(&adjusted_forecast, &buckets_vec)
             };
 
-            // NOAA cross-validation still adjusts probabilities (v4 Task 2) â€” keep that.
+            // NOAA cross-validation still adjusts probabilities (v4 Task 2) â€" keep that.
             // Hard market skip removed: CV-adjusted Kelly handles disagreement via smaller position size.
             if models_disagree_too_much(&adjusted_forecast, market.unit) {
                 let noaa_val = adjusted_forecast.model_temps.get("noaa").copied().unwrap_or(0.0);
@@ -1078,7 +1096,7 @@ impl WeatherStrategy {
                     if market.unit == TempUnit::Fahrenheit { "F" } else { "C" }
                 );
                 scan.markets_high_disagreement += 1;
-                // No continue â€” CV-adjusted Kelly handles disagreement via smaller position size
+                // No continue â€" CV-adjusted Kelly handles disagreement via smaller position size
             }
 
             // Pre-compute diagnostic values for trade logging (Task 7)
@@ -1147,7 +1165,7 @@ impl WeatherStrategy {
                     continue;
                 }
 
-                // Minimum market price filter â€” skip buckets priced below threshold
+                // Minimum market price filter â€" skip buckets priced below threshold
                 // When market prices <5Â¢, our model is unreliable in the tails
                 scan.buckets_evaluated += 1;
                 if market_price < self.config.min_market_price {
@@ -1167,7 +1185,7 @@ impl WeatherStrategy {
 
                 // Double-check against trade log file (catches positions from previous sessions
                 // that may not be in placed_this_session due to resolved/parsing issues)
-                // Uses pre-loaded keys from start of run_once() â€” not per-bucket file reads
+                // Uses pre-loaded keys from start of run_once() â€" not per-bucket file reads
                 if file_position_keys.contains(&position_key) {
                     warn!("DOUBLE-CHECK SKIP: {} already in trade log", position_key);
                     self.placed_this_session.insert(position_key.clone());
@@ -1176,17 +1194,17 @@ impl WeatherStrategy {
                 }
 
                 // Forecast buffer check: skip bets where forecast is too close to bucket threshold.
-                // A 1-2Â° shift in forecast can flip the outcome â€” avoid borderline bets.
+                // A 1-2Â° shift in forecast can flip the outcome â€" avoid borderline bets.
                 let buffer = match market.unit {
                     super::TempUnit::Fahrenheit => self.config.forecast_buffer_f,
                     super::TempUnit::Celsius => self.config.forecast_buffer_c,
                 };
                 let forecast_temp = adjusted_forecast.high_temp;
                 let near_threshold = if bucket.temp_bucket.max_temp.is_finite() {
-                    // "X or lower" bucket â€” forecast must be well below max
+                    // "X or lower" bucket â€" forecast must be well below max
                     (forecast_temp - bucket.temp_bucket.max_temp).abs() < buffer
                 } else if bucket.temp_bucket.min_temp.is_finite() {
-                    // "X or higher" bucket â€” forecast must be well above min
+                    // "X or higher" bucket â€" forecast must be well above min
                     (forecast_temp - bucket.temp_bucket.min_temp).abs() < buffer
                 } else {
                     false
@@ -1200,14 +1218,20 @@ impl WeatherStrategy {
                     continue;
                 }
 
-                // Task 2: NOAA cross-validation â€” adjust probability when NOAA disagrees
+                // Task 2: NOAA cross-validation â€" adjust probability when NOAA disagrees
                 let our_prob = cross_validate_with_noaa(
                     our_prob,
                     noaa_temp_diag,
                     &bucket.temp_bucket,
                     market.unit,
                 );
-                // Task 4: Clamp probability to [0.02, 0.95]
+
+                // Fix 2: Apply Bayesian shrinkage toward base rate
+                let base_rate = 1.0 / buckets_vec.len() as f64; // Uniform prior
+                let shrinkage_factor = self.config.probability_shrinkage;
+                let our_prob = (1.0 - shrinkage_factor) * our_prob + shrinkage_factor * base_rate;
+
+                // Task 4: Clamp probability to [0.02, 0.85]
                 let our_prob = clamp_probability(our_prob);
 
                 // v7 Task 2: Southern Hemisphere seasonal warm bias correction
@@ -1257,7 +1281,7 @@ impl WeatherStrategy {
                     continue;
                 }
 
-                // Task 6: Narrow bucket ensemble check â€” require >= 5 members for tight ranges
+                // Task 6: Narrow bucket ensemble check â€" require >= 5 members for tight ranges
                 if narrow_bucket_insufficient_ensemble(&bucket.temp_bucket, market.unit, ensemble_count_diag) {
                     debug!(
                         "NARROW ENSEMBLE SKIP: {} | {} | range too tight with only {} ensemble members",
@@ -1272,6 +1296,18 @@ impl WeatherStrategy {
                 let is_narrow = bucket.temp_bucket.min_temp.is_finite()
                     && bucket.temp_bucket.max_temp.is_finite()
                     && (bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp) <= 2.0;
+
+                // Kill switch: hard-skip all narrow/exact bets regardless of edge
+                if self.config.skip_narrow_bets && is_narrow {
+                    info!(
+                        "NARROW SKIP (kill switch): {} | {} | range={:.1}",
+                        market.question, bucket.label,
+                        bucket.temp_bucket.max_temp - bucket.temp_bucket.min_temp
+                    );
+                    scan.buckets_skipped_narrow += 1;
+                    continue;
+                }
+
                 let required_edge = if is_narrow {
                     self.config.min_edge_narrow
                 } else {
@@ -1291,7 +1327,7 @@ impl WeatherStrategy {
                     scan.buckets_skipped_no_edge += 1;
                 }
 
-                // Task 2: Calibration logging â€” log EVERY evaluated bucket (trade_placed=false).
+                // Task 2: Calibration logging â€" log EVERY evaluated bucket (trade_placed=false).
                 // Provides data for future empirical calibration curve C(p,t).
                 let bucket_type_str = if !bucket.temp_bucket.max_temp.is_finite() && bucket.temp_bucket.max_temp > 0.0 {
                     "cumulative_above"
@@ -1325,7 +1361,7 @@ impl WeatherStrategy {
                 };
                 log_calibration_entry(&cal_entry);
 
-                // Minimum probability gate — after calibration so filtered buckets are still logged
+                // Minimum probability gate - after calibration so filtered buckets are still logged
                 if our_prob < self.config.min_our_probability {
                     warn!("TRADE BLOCKED (prob gate): {} | our_prob={:.2} < min={:.2}",
                         bucket.label, our_prob, self.config.min_our_probability);
@@ -1334,6 +1370,17 @@ impl WeatherStrategy {
                 }
 
                 if edge >= required_edge {
+                    // Max buys per market cap check
+                    let slug_for_cap = market.slug.as_str();
+                    let existing_buys = buys_per_market.get(slug_for_cap).copied().unwrap_or(0);
+                    if existing_buys >= self.config.max_buys_per_market {
+                        warn!(
+                            "MARKET CAP REACHED: {} | buys={} >= max={} | skipping {}",
+                            market.question, existing_buys, self.config.max_buys_per_market, bucket.label
+                        );
+                        continue;
+                    }
+
                     info!(
                         "EDGE FOUND: {} | {} | our={:.2} vs mkt={:.2} | edge={:.2}",
                         market.question, bucket.label, our_prob, market_price, edge
@@ -1421,7 +1468,7 @@ impl WeatherStrategy {
                             match (edge, best_ask, ask_depth) {
                                 // HIGH EDGE + LIQUIDITY: take the ask (taker, guaranteed fill)
                                 (e, Some(ask), depth) if e > 0.25 && depth >= kelly_size && ask <= our_prob => {
-                                    info!("TAKER: edge={:.1}% depth=${:.2} â€” taking ask at {:.2}",
+                                    info!("TAKER: edge={:.1}% depth=${:.2} - taking ask at {:.2}",
                                         e * 100.0, depth, ask);
                                     ask.min(0.95)
                                 },
@@ -1429,7 +1476,7 @@ impl WeatherStrategy {
                                 (e, Some(ask), _) if e > 0.15 && (ask - 0.02) <= our_prob => {
                                     let price = ((ask - 0.02) * 100.0).round() / 100.0;
                                     let price = price.max(0.01).min(0.95);
-                                    info!("NEAR-ASK: edge={:.1}% â€” posting at {:.2} (ask={:.2})",
+                                    info!("NEAR-ASK: edge={:.1}% - posting at {:.2} (ask={:.2})",
                                         e * 100.0, price, ask);
                                     price
                                 },
@@ -1444,14 +1491,14 @@ impl WeatherStrategy {
                                         maker_price
                                     };
                                     let price = price.max(0.01).min(0.95);
-                                    info!("MAKER: our_prob={:.2} market_mid={:.2} â€” posting at {:.2}",
+                                    info!("MAKER: our_prob={:.2} market_mid={:.2} - posting at {:.2}",
                                         our_prob, market_price, price);
                                     price
                                 }
                             }
                         },
                         Err(e) => {
-                            warn!("Order book fetch failed: {} â€” using maker pricing", e);
+                            warn!("Order book fetch failed: {} - using maker pricing", e);
                             let maker_price = (our_prob * 0.85 * 100.0).round() / 100.0;
                             let price = if market_price < 0.20 {
                                 maker_price.min(market_price * 2.0)
@@ -1516,7 +1563,7 @@ impl WeatherStrategy {
                             }
                         }
                     } else {
-                        println!("     (DRY RUN â€” not executing)");
+                        println!("     (DRY RUN - not executing)");
                         self.total_exposure += cost;
                         trades_placed += 1;
                         self.placed_this_session.insert(position_key.clone());
@@ -1563,18 +1610,21 @@ impl WeatherStrategy {
                     };
 
                     // Telegram notification
+                    let dry_run_text = if self.dry_run { "\n(DRY RUN)" } else { "" };
                     let msg = format!(
                         "Weather Trade\n\n{}\nBucket: {}\nCity: {}\n\nOur P: {:.1}% | Market: {:.1}%\nEdge: {:.1}%\n\nBUY {:.2} YES @ ${:.4} = ${:.2}{}",
                         market.question, bucket.label, forecast.city,
                         our_prob * 100.0, market_price * 100.0, edge * 100.0,
-                        shares, order_price, cost,
-                        if self.dry_run { "\n(DRY RUN)" } else { "" }
+                        shares, order_price, cost, dry_run_text
                     );
                     self.notifier.send(&msg).await;
 
                     self.trades.push(trade);
 
-                    // Task 2: Calibration logging — log trade execution (trade_placed=true)
+                    // Track in-session buy count for max_buys_per_market cap
+                    *buys_per_market.entry(market.slug.clone()).or_insert(0) += 1;
+
+                    // Task 2: Calibration logging - log trade execution (trade_placed=true)
                     let mut trade_cal_entry = cal_entry.clone();
                     trade_cal_entry.trade_placed = true;
                     trade_cal_entry.trade_amount_usd = cost;
@@ -1619,7 +1669,7 @@ impl WeatherStrategy {
                     ladder_candidates.push((i, model_prob, market_price, edge));
                 }
 
-                // Sort by edge descending â€” highest-edge cheap buckets first
+                // Sort by edge descending â€" highest-edge cheap buckets first
                 ladder_candidates.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
                 let mut ladder_count = 0usize;
@@ -2028,7 +2078,7 @@ impl WeatherStrategy {
     }
 
     /// Reconcile local trade log with Polymarket activity API for ground-truth fill data.
-    /// The CLOB API is ephemeral — orders vanish after settlement — so we use the
+    /// The CLOB API is ephemeral - orders vanish after settlement - so we use the
     /// data-api activity endpoint which persists indefinitely.
     async fn reconcile_with_api(&mut self) {
         let proxy_wallet = "0x0585bc93D1a91B0a325d4A1Fa159e080E9D24853";
