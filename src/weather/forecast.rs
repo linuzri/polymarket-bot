@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use statrs::distribution::{ContinuousCDF, Normal};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use super::CityForecast;
 
@@ -22,7 +22,17 @@ impl TempBucket {
 
 /// Check if a temperature falls within a bucket
 fn temp_in_bucket(temp: f64, bucket: &TempBucket) -> bool {
-    temp >= bucket.min_temp - 0.5 && temp <= bucket.max_temp + 0.5
+    // Use strict half-open intervals with NO tolerance
+    if bucket.max_temp.is_infinite() && bucket.max_temp > 0.0 {
+        // "X or higher" bucket
+        temp >= bucket.min_temp
+    } else if bucket.min_temp.is_infinite() && bucket.min_temp < 0.0 {
+        // "X or lower" bucket
+        temp <= bucket.max_temp
+    } else {
+        // Normal bucket: min inclusive, max exclusive
+        temp >= bucket.min_temp && temp < bucket.max_temp
+    }
 }
 
 /// Calculate probability for each temperature bucket given a forecast.
@@ -62,12 +72,12 @@ pub fn calculate_probabilities(
         };
 
         for bucket in buckets {
-            let base_p = if bucket.max_temp.is_infinite() {
-                1.0 - dist.cdf(bucket.min_temp - 0.5)
+            let base_p = if bucket.max_temp.is_infinite() && bucket.max_temp > 0.0 {
+                1.0 - dist.cdf(bucket.min_temp)
             } else if bucket.min_temp.is_infinite() && bucket.min_temp < 0.0 {
-                dist.cdf(bucket.max_temp + 0.5)
+                dist.cdf(bucket.max_temp)
             } else {
-                dist.cdf(bucket.max_temp + 0.5) - dist.cdf(bucket.min_temp - 0.5)
+                dist.cdf(bucket.max_temp) - dist.cdf(bucket.min_temp)
             };
 
             let count = bucket_counts.get(&bucket.label).cloned().unwrap_or(0);
@@ -112,12 +122,12 @@ pub fn calculate_probabilities(
     };
 
     for bucket in buckets {
-        let p = if bucket.max_temp.is_infinite() {
-            1.0 - dist.cdf(bucket.min_temp - 0.5)
+        let p = if bucket.max_temp.is_infinite() && bucket.max_temp > 0.0 {
+            1.0 - dist.cdf(bucket.min_temp)
         } else if bucket.min_temp.is_infinite() && bucket.min_temp < 0.0 {
-            dist.cdf(bucket.max_temp + 0.5)
+            dist.cdf(bucket.max_temp)
         } else {
-            dist.cdf(bucket.max_temp + 0.5) - dist.cdf(bucket.min_temp - 0.5)
+            dist.cdf(bucket.max_temp) - dist.cdf(bucket.min_temp)
         };
 
         debug!(
@@ -153,9 +163,56 @@ pub fn calculate_probabilities_ensemble(
         return probs;
     }
 
+    // Fix 3: Handle degenerate ensembles
+    if n < 10.0 {
+        warn!("Ensemble count {} < 10, skipping market", n);
+        return probs; // Return empty probabilities - skip the market
+    }
+
+    // Check for zero standard deviation (all members agree)
+    if members.len() > 1 {
+        let mean = members.iter().sum::<f64>() / n;
+        let variance = members.iter()
+            .map(|t| (t - mean).powi(2))
+            .sum::<f64>() / n;
+        let std_dev = variance.sqrt();
+        
+        if std_dev == 0.0 {
+            info!("Ensemble std=0.0 (all members agree), capping probability at 0.80");
+            // All members agree - that's fine but cap probability at 0.80
+            for bucket in buckets {
+                let count = members.iter()
+                    .filter(|&&temp| {
+                        if bucket.max_temp.is_infinite() && bucket.max_temp > 0.0 {
+                            temp >= bucket.min_temp
+                        } else if bucket.min_temp.is_infinite() && bucket.min_temp < 0.0 {
+                            temp <= bucket.max_temp
+                        } else {
+                            temp >= bucket.min_temp && temp < bucket.max_temp
+                        }
+                    })
+                    .count();
+                let prob = (count as f64 / n).min(0.80); // Cap at 0.80
+                probs.insert(bucket.label.clone(), prob);
+            }
+            return probs;
+        }
+    }
+
     for bucket in buckets {
         let count = members.iter()
-            .filter(|&&temp| temp >= bucket.min_temp - 0.5 && temp <= bucket.max_temp + 0.5)
+            .filter(|&&temp| {
+                if bucket.max_temp.is_infinite() && bucket.max_temp > 0.0 {
+                    // "X or higher" bucket
+                    temp >= bucket.min_temp
+                } else if bucket.min_temp.is_infinite() && bucket.min_temp < 0.0 {
+                    // "X or lower" bucket
+                    temp <= bucket.max_temp
+                } else {
+                    // Normal bucket: min inclusive, max exclusive
+                    temp >= bucket.min_temp && temp < bucket.max_temp
+                }
+            })
             .count();
         let prob = count as f64 / n;
         probs.insert(bucket.label.clone(), prob);
